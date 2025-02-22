@@ -4,12 +4,8 @@
 , src
 }:
 let
-  # This builds a static PostgREST exectuable based on pkgsStatic.
-  # pkgsStatic is based on musl, so is a kind of cross-compilation.
-  # We still make this explicit here via pkgsCross, because we need
-  # to get postgresql/libpq for musl, too.
-  pkgsCross = pkgs.pkgsCross.musl64;
-  inherit (pkgsCross) pkgsStatic;
+  # This builds a static PostgREST executable based on pkgsStatic.
+  inherit (pkgs) pkgsStatic;
   inherit (pkgsStatic.haskell) lib;
 
   packagesStatic =
@@ -23,38 +19,25 @@ let
         enableNativeBignum = true;
       };
 
-      overrides = pkgs.lib.composeExtensions old.overrides (final: prev: {
-        postgresql-libpq = (prev.postgresql-libpq.override {
+      overrides = pkgs.lib.composeExtensions old.overrides (_: prev: {
+        postgresql-libpq = (lib.overrideCabal prev.postgresql-libpq {
+          # TODO: This section can be simplified when this PR has made it's way to us:
+          #  https://github.com/NixOS/nixpkgs/pull/286370
+          # Additionally, we need to use the default version in nixpkgs, otherwise the
+          # override will not be active as well.
+          # Using use-pkg-config flag, because pg_config won't work when cross-compiling
+          configureFlags = [ "-fuse-pkg-config" ];
           # postgresql doesn't build in the fully static overlay - but the default
           # derivation is built with static libraries anyway.
-          postgresql = pkgsCross.libpq;
-        }).overrideAttrs (finalAttrs: prevAttrs: {
-          # Using use-pkg-config flag, because pg_config won't work when cross-compiling
-          configureFlags = prevAttrs.configureFlags ++ [ "-fuse-pkg-config" ];
-          # Using pkg-config without pkgsCross, because "pkg-config" is hardcoded in
-          # postgresql-libpq's Setup.hs. Using pkgsStatic to make pkg-config return the
-          # static libs for libpq.
-          nativeBuildInputs = prevAttrs.nativeBuildInputs ++ [ pkgs.pkgsStatic.pkg-config ];
-
-          buildInputs = prevAttrs.buildInputs ++ [
-            (pkgsStatic.libkrb5.overrideAttrs (finalAttrs: prevAttrs: {
-              configureFlags = prevAttrs.configureFlags ++ [
-                "--sysconfdir=/etc"
-                # disable keyutils dependency, to avoid linking errors
-                "--without-keyutils"
-              ];
-
-              postInstall = prevAttrs.postInstall + ''
-                ${pkgsStatic.pkgsBuildHost.removeReferencesTo}/bin/remove-references-to -t $out $out/lib/*.a
-              '';
-            }))
-          ];
+          libraryPkgconfigDepends = [ pkgsStatic.libpq ];
+          librarySystemDepends = [ ];
+        }).overrideAttrs (_: prevAttrs: {
+          buildInputs = prevAttrs.buildInputs ++ [ pkgsStatic.openssl ];
         });
       });
     });
 
   makeExecutableStatic = drv: pkgs.lib.pipe drv [
-    (lib.compose.appendConfigureFlags [ "--enable-executable-static" ])
     lib.compose.justStaticExecutables
 
     # To successfully compile a redistributable, fully static executable we need to:

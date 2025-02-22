@@ -8,13 +8,11 @@ import Test.Hspec          hiding (pendingWith)
 import Test.Hspec.Wai
 import Test.Hspec.Wai.JSON
 
-import PostgREST.Config.PgVersion (PgVersion, pgVersion110,
-                                   pgVersion112, pgVersion121)
-import Protolude                  hiding (get)
+import Protolude  hiding (get)
 import SpecHelper
 
-spec :: PgVersion -> SpecWith ((), Application)
-spec actualPgVersion = do
+spec :: SpecWith ((), Application)
+spec = do
 
   describe "Querying a table with a column called count" $
     it "should not confuse count column with pg_catalog.count aggregate" $
@@ -26,7 +24,12 @@ spec actualPgVersion = do
 
   describe "Querying a nonexistent table" $
     it "causes a 404" $
-      get "/faketable" `shouldRespondWith` 404
+      get "/faketable"
+      `shouldRespondWith`
+      [json| {"code":"PGRST205","details":null,"hint":"Perhaps you meant the table 'test.private_table'","message":"Could not find the table 'test.faketable' in the schema cache"} |]
+      { matchStatus = 404
+      , matchHeaders = []
+      }
 
   describe "Filtering response" $ do
     it "matches with equality" $
@@ -65,8 +68,18 @@ spec actualPgVersion = do
         [json| [{"a":"1","b":"0"},{"a":"2","b":"0"}] |]
         { matchHeaders = [matchContentTypeJson] }
 
+    it "matches not_null using is operator" $
+      get "/no_pk?a=is.not_null" `shouldRespondWith`
+        [json| [{"a":"1","b":"0"},{"a":"2","b":"0"}] |]
+        { matchHeaders = [matchContentTypeJson] }
+
     it "matches nulls in varchar and numeric fields alike" $ do
       get "/no_pk?a=is.null" `shouldRespondWith`
+        [json| [{"a": null, "b": null}] |]
+        { matchHeaders = [matchContentTypeJson] }
+
+    it "not.is.not_null is equivalent to is.null" $ do
+      get "/no_pk?a=not.is.not_null" `shouldRespondWith`
         [json| [{"a": null, "b": null}] |]
         { matchHeaders = [matchContentTypeJson] }
 
@@ -85,11 +98,17 @@ spec actualPgVersion = do
         [json| [{"id": 3, "name": "wash the dishes", "done": null }] |]
         { matchHeaders = [matchContentTypeJson] }
 
-    it "matches with trilean values in upper or mixed case" $ do
+    it "matches with null and not_null values in upper or mixed case" $ do
       get "/chores?done=is.NULL" `shouldRespondWith`
         [json| [{"id": 3, "name": "wash the dishes", "done": null }] |]
         { matchHeaders = [matchContentTypeJson] }
 
+      get "/chores?done=is.NoT_NuLl" `shouldRespondWith`
+        [json| [{"id": 1, "name": "take out the garbage", "done": true }
+               ,{"id": 2, "name": "do the laundry", "done": false }] |]
+        { matchHeaders = [matchContentTypeJson] }
+
+    it "matches with trilean values in upper or mixed case" $ do
       get "/chores?done=is.TRUE" `shouldRespondWith`
         [json| [{"id": 1, "name": "take out the garbage", "done": true }] |]
         { matchHeaders = [matchContentTypeJson] }
@@ -153,30 +172,30 @@ spec actualPgVersion = do
       get "/simple_pk?k=not.imatch.^xy&order=extra.asc" `shouldRespondWith` "[]"
 
     describe "Full text search operator" $ do
-      it "finds matches with to_tsquery" $
-        get "/tsearch?text_search_vector=fts.impossible" `shouldRespondWith`
-          [json| [{"text_search_vector": "'fun':5 'imposs':9 'kind':3" }] |]
-          { matchHeaders = [matchContentTypeJson] }
+      context "tsvector columns" $ do
+        it "finds matches with to_tsquery" $
+          get "/tsearch?text_search_vector=fts.impossible" `shouldRespondWith`
+            [json| [{"text_search_vector": "'fun':5 'imposs':9 'kind':3" }] |]
+            { matchHeaders = [matchContentTypeJson] }
 
-      it "can use lexeme boolean operators(&=%26, |=%7C, !) in to_tsquery" $ do
-        get "/tsearch?text_search_vector=fts.fun%26possible" `shouldRespondWith`
-          [json| [ {"text_search_vector": "'also':2 'fun':3 'possibl':8"}] |]
-          { matchHeaders = [matchContentTypeJson] }
-        get "/tsearch?text_search_vector=fts.impossible%7Cpossible" `shouldRespondWith`
-          [json| [
-          {"text_search_vector": "'fun':5 'imposs':9 'kind':3"},
-          {"text_search_vector": "'also':2 'fun':3 'possibl':8"}] |]
-          { matchHeaders = [matchContentTypeJson] }
-        get "/tsearch?text_search_vector=fts.fun%26!possible" `shouldRespondWith`
-          [json| [ {"text_search_vector": "'fun':5 'imposs':9 'kind':3"}] |]
-          { matchHeaders = [matchContentTypeJson] }
+        it "can use lexeme boolean operators(&=%26, |=%7C, !) in to_tsquery" $ do
+          get "/tsearch?text_search_vector=fts.fun%26possible" `shouldRespondWith`
+            [json| [ {"text_search_vector": "'also':2 'fun':3 'possibl':8"}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch?text_search_vector=fts.impossible%7Cpossible" `shouldRespondWith`
+            [json| [
+            {"text_search_vector": "'fun':5 'imposs':9 'kind':3"},
+            {"text_search_vector": "'also':2 'fun':3 'possibl':8"}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch?text_search_vector=fts.fun%26!possible" `shouldRespondWith`
+            [json| [ {"text_search_vector": "'fun':5 'imposs':9 'kind':3"}] |]
+            { matchHeaders = [matchContentTypeJson] }
 
-      it "finds matches with plainto_tsquery" $
-        get "/tsearch?text_search_vector=plfts.The%20Fat%20Rats" `shouldRespondWith`
-          [json| [ {"text_search_vector": "'ate':3 'cat':2 'fat':1 'rat':4" }] |]
-          { matchHeaders = [matchContentTypeJson] }
+        it "finds matches with plainto_tsquery" $
+          get "/tsearch?text_search_vector=plfts.The%20Fat%20Rats" `shouldRespondWith`
+            [json| [ {"text_search_vector": "'ate':3 'cat':2 'fat':1 'rat':4" }] |]
+            { matchHeaders = [matchContentTypeJson] }
 
-      when (actualPgVersion >= pgVersion112) $ do
         it "finds matches with websearch_to_tsquery" $
             get "/tsearch?text_search_vector=wfts.The%20Fat%20Rats" `shouldRespondWith`
                 [json| [ {"text_search_vector": "'ate':3 'cat':2 'fat':1 'rat':4" }] |]
@@ -199,73 +218,272 @@ spec actualPgVersion = do
               [json| [ {"text_search_vector": "'fun':5 'imposs':9 'kind':3"}] |]
               { matchHeaders = [matchContentTypeJson] }
 
-      it "finds matches with different dictionaries" $ do
-        get "/tsearch?text_search_vector=fts(french).amusant" `shouldRespondWith`
-          [json| [{"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4" }] |]
-          { matchHeaders = [matchContentTypeJson] }
-        get "/tsearch?text_search_vector=plfts(french).amusant%20impossible" `shouldRespondWith`
-          [json| [{"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4" }] |]
-          { matchHeaders = [matchContentTypeJson] }
-
-        when (actualPgVersion >= pgVersion112) $
-            get "/tsearch?text_search_vector=wfts(french).amusant%20impossible"
-                `shouldRespondWith`
-                  [json| [{"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4" }] |]
-                  { matchHeaders = [matchContentTypeJson] }
-
-      it "can be negated with not operator" $ do
-        get "/tsearch?text_search_vector=not.fts.impossible%7Cfat%7Cfun" `shouldRespondWith`
-          [json| [
-            {"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4"},
-            {"text_search_vector": "'art':4 'spass':5 'unmog':7"}]|]
-          { matchHeaders = [matchContentTypeJson] }
-        get "/tsearch?text_search_vector=not.fts(english).impossible%7Cfat%7Cfun" `shouldRespondWith`
-          [json| [
-            {"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4"},
-            {"text_search_vector": "'art':4 'spass':5 'unmog':7"}]|]
-          { matchHeaders = [matchContentTypeJson] }
-        get "/tsearch?text_search_vector=not.plfts.The%20Fat%20Rats" `shouldRespondWith`
-          [json| [
-            {"text_search_vector": "'fun':5 'imposs':9 'kind':3"},
-            {"text_search_vector": "'also':2 'fun':3 'possibl':8"},
-            {"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4"},
-            {"text_search_vector": "'art':4 'spass':5 'unmog':7"}]|]
-          { matchHeaders = [matchContentTypeJson] }
-        when (actualPgVersion >= pgVersion112) $
-            get "/tsearch?text_search_vector=not.wfts(english).impossible%20or%20fat%20or%20fun"
-                `shouldRespondWith`
-                  [json| [
-                    {"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4"},
-                    {"text_search_vector": "'art':4 'spass':5 'unmog':7"}]|]
-                  { matchHeaders = [matchContentTypeJson] }
-
-      context "Use of the phraseto_tsquery function" $ do
-        it "finds matches" $
-          get "/tsearch?text_search_vector=phfts.The%20Fat%20Cats" `shouldRespondWith`
-            [json| [{"text_search_vector": "'ate':3 'cat':2 'fat':1 'rat':4" }] |]
+        it "finds matches with different dictionaries" $ do
+          get "/tsearch?text_search_vector=fts(french).amusant" `shouldRespondWith`
+            [json| [{"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4" }] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch?text_search_vector=plfts(french).amusant%20impossible" `shouldRespondWith`
+            [json| [{"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4" }] |]
             { matchHeaders = [matchContentTypeJson] }
 
-        it "finds matches with different dictionaries" $
-          get "/tsearch?text_search_vector=phfts(german).Art%20Spass" `shouldRespondWith`
-            [json| [{"text_search_vector": "'art':4 'spass':5 'unmog':7" }] |]
-            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch?text_search_vector=wfts(french).amusant%20impossible"
+              `shouldRespondWith`
+                [json| [{"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4" }] |]
+                { matchHeaders = [matchContentTypeJson] }
 
-        it "can be negated with not operator" $
-          get "/tsearch?text_search_vector=not.phfts(english).The%20Fat%20Cats" `shouldRespondWith`
+        it "can be negated with not operator" $ do
+          get "/tsearch?text_search_vector=not.fts.impossible%7Cfat%7Cfun" `shouldRespondWith`
+            [json| [
+              {"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4"},
+              {"text_search_vector": "'art':4 'spass':5 'unmog':7"}]|]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch?text_search_vector=not.fts(english).impossible%7Cfat%7Cfun" `shouldRespondWith`
+            [json| [
+              {"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4"},
+              {"text_search_vector": "'art':4 'spass':5 'unmog':7"}]|]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch?text_search_vector=not.plfts.The%20Fat%20Rats" `shouldRespondWith`
             [json| [
               {"text_search_vector": "'fun':5 'imposs':9 'kind':3"},
               {"text_search_vector": "'also':2 'fun':3 'possibl':8"},
               {"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4"},
               {"text_search_vector": "'art':4 'spass':5 'unmog':7"}]|]
             { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch?text_search_vector=not.wfts(english).impossible%20or%20fat%20or%20fun"
+              `shouldRespondWith`
+                [json| [
+                  {"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4"},
+                  {"text_search_vector": "'art':4 'spass':5 'unmog':7"}]|]
+                { matchHeaders = [matchContentTypeJson] }
 
-        it "can be used with or query param" $
-          get "/tsearch?or=(text_search_vector.phfts(german).Art%20Spass, text_search_vector.phfts(french).amusant, text_search_vector.fts(english).impossible)" `shouldRespondWith`
-            [json|[
-              {"text_search_vector": "'fun':5 'imposs':9 'kind':3" },
-              {"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4" },
-              {"text_search_vector": "'art':4 'spass':5 'unmog':7"}
-            ]|] { matchHeaders = [matchContentTypeJson] }
+        context "Use of the phraseto_tsquery function" $ do
+          it "finds matches" $
+            get "/tsearch?text_search_vector=phfts.The%20Fat%20Cats" `shouldRespondWith`
+              [json| [{"text_search_vector": "'ate':3 'cat':2 'fat':1 'rat':4" }] |]
+              { matchHeaders = [matchContentTypeJson] }
+
+          it "finds matches with different dictionaries" $
+            get "/tsearch?text_search_vector=phfts(german).Art%20Spass" `shouldRespondWith`
+              [json| [{"text_search_vector": "'art':4 'spass':5 'unmog':7" }] |]
+              { matchHeaders = [matchContentTypeJson] }
+
+          it "can be negated with not operator" $
+            get "/tsearch?text_search_vector=not.phfts(english).The%20Fat%20Cats" `shouldRespondWith`
+              [json| [
+                {"text_search_vector": "'fun':5 'imposs':9 'kind':3"},
+                {"text_search_vector": "'also':2 'fun':3 'possibl':8"},
+                {"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4"},
+                {"text_search_vector": "'art':4 'spass':5 'unmog':7"}]|]
+              { matchHeaders = [matchContentTypeJson] }
+
+          it "can be used with or query param" $
+            get "/tsearch?or=(text_search_vector.phfts(german).Art%20Spass, text_search_vector.phfts(french).amusant, text_search_vector.fts(english).impossible)" `shouldRespondWith`
+              [json|[
+                {"text_search_vector": "'fun':5 'imposs':9 'kind':3" },
+                {"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4" },
+                {"text_search_vector": "'art':4 'spass':5 'unmog':7"}
+              ]|] { matchHeaders = [matchContentTypeJson] }
+
+          it "works with tsvector computed fields" $
+            get "/tsearch_to_tsvector?select=text_search_vector&text_search_vector=fts(simple).of" `shouldRespondWith`
+              [json| [
+                {"text_search_vector":"'do':7 'fun':5 'impossible':9 'it':1 'kind':3 'of':4 's':2 'the':8 'to':6"}
+              ]|]
+              { matchHeaders = [matchContentTypeJson] }
+
+      context "text and json columns" $ do
+        it "finds matches with to_tsquery" $ do
+          get "/tsearch_to_tsvector?select=text_search&text_search=fts.impossible" `shouldRespondWith`
+            [json| [
+              {"text_search": "It's kind of fun to do the impossible"},
+              {"text_search": "C'est un peu amusant de faire l'impossible"}]
+            |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=fts.impossible" `shouldRespondWith`
+            [json| [
+              {"jsonb_search" :{"text_search": "It's kind of fun to do the impossible"}},
+              {"jsonb_search" :{"text_search": "C'est un peu amusant de faire l'impossible"}}]
+            |]
+            { matchHeaders = [matchContentTypeJson] }
+
+        it "can use lexeme boolean operators(&=%26, |=%7C, !) in to_tsquery" $ do
+          get "/tsearch_to_tsvector?select=text_search&text_search=fts.fun%26possible" `shouldRespondWith`
+            [json| [{"text_search": "But also fun to do what is possible"}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=fts.fun%26possible" `shouldRespondWith`
+            [json| [{"jsonb_search" :{"text_search": "But also fun to do what is possible"}}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=text_search&text_search=fts.impossible%7Cpossible"  `shouldRespondWith`
+            [json| [
+              {"text_search": "It's kind of fun to do the impossible"},
+              {"text_search": "But also fun to do what is possible"},
+              {"text_search": "C'est un peu amusant de faire l'impossible"}]
+            |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=fts.impossible%7Cpossible" `shouldRespondWith`
+            [json| [
+              {"jsonb_search" :{"text_search": "It's kind of fun to do the impossible"}},
+              {"jsonb_search" :{"text_search": "But also fun to do what is possible"}},
+              {"jsonb_search" :{"text_search": "C'est un peu amusant de faire l'impossible"}}]
+            |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=text_search&text_search=fts.fun%26!possible"  `shouldRespondWith`
+            [json| [{"text_search": "It's kind of fun to do the impossible"}]|]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=fts.fun%26!possible" `shouldRespondWith`
+            [json| [{"jsonb_search" :{"text_search": "It's kind of fun to do the impossible"}}] |]
+            { matchHeaders = [matchContentTypeJson] }
+
+        it "finds matches with plainto_tsquery" $ do
+          get "/tsearch_to_tsvector?select=text_search&text_search=plfts.The%20Fat%20Rats"  `shouldRespondWith`
+            [json| [{"text_search": "Fat cats ate rats"}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=plfts.The%20Fat%20Rats" `shouldRespondWith`
+            [json| [{"jsonb_search" :{"text_search": "Fat cats ate rats"}}] |]
+            { matchHeaders = [matchContentTypeJson] }
+
+        it "finds matches with websearch_to_tsquery" $ do
+          get "/tsearch_to_tsvector?select=text_search&text_search=wfts.The%20Fat%20Rats"  `shouldRespondWith`
+            [json| [{"text_search": "Fat cats ate rats"}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=wfts.The%20Fat%20Rats" `shouldRespondWith`
+            [json| [{"jsonb_search" :{"text_search": "Fat cats ate rats"}}] |]
+            { matchHeaders = [matchContentTypeJson] }
+
+        it "can use boolean operators(and, or, -) in websearch_to_tsquery" $ do
+          get "/tsearch_to_tsvector?select=text_search&text_search=wfts.fun%20and%20possible" `shouldRespondWith`
+            [json| [{"text_search": "But also fun to do what is possible"}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=wfts.fun%20and%20possible" `shouldRespondWith`
+            [json| [{"jsonb_search" :{"text_search": "But also fun to do what is possible"}}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=text_search&text_search=wfts.impossible%20or%20possible" `shouldRespondWith`
+            [json| [
+              {"text_search": "It's kind of fun to do the impossible"},
+              {"text_search": "But also fun to do what is possible"},
+              {"text_search": "C'est un peu amusant de faire l'impossible"}]
+            |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=wfts.impossible%20or%20possible" `shouldRespondWith`
+            [json| [
+              {"jsonb_search" :{"text_search": "It's kind of fun to do the impossible"}},
+              {"jsonb_search" :{"text_search": "But also fun to do what is possible"}},
+              {"jsonb_search" :{"text_search": "C'est un peu amusant de faire l'impossible"}}]
+            |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=text_search&text_search=wfts.fun%20and%20-possible" `shouldRespondWith`
+            [json| [{"text_search": "It's kind of fun to do the impossible"}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=wfts.fun%20and%20-possible" `shouldRespondWith`
+            [json| [{"jsonb_search" :{"text_search": "It's kind of fun to do the impossible"}}] |]
+            { matchHeaders = [matchContentTypeJson] }
+
+        it "finds matches with different dictionaries and uses them as configuration for to_tsvector()" $ do
+          get "/tsearch_to_tsvector?select=text_search&text_search=fts(french).amusant"  `shouldRespondWith`
+            [json| [{"text_search": "C'est un peu amusant de faire l'impossible"}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=fts(french).amusant" `shouldRespondWith`
+            [json| [{"jsonb_search" :{"text_search": "C'est un peu amusant de faire l'impossible"}}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=text_search&text_search=plfts(french).amusant%20impossible"  `shouldRespondWith`
+            [json| [{"text_search": "C'est un peu amusant de faire l'impossible"}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=plfts(french).amusant%20impossible" `shouldRespondWith`
+            [json| [{"jsonb_search" :{"text_search": "C'est un peu amusant de faire l'impossible"}}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=text_search&text_search=wfts(french).amusant%20impossible" `shouldRespondWith`
+            [json| [{"text_search": "C'est un peu amusant de faire l'impossible"}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=wfts(french).amusant%20impossible" `shouldRespondWith`
+            [json| [{"jsonb_search" :{"text_search": "C'est un peu amusant de faire l'impossible"}}] |]
+            { matchHeaders = [matchContentTypeJson] }
+
+        it "can be negated with not operator" $ do
+          get "/tsearch_to_tsvector?select=text_search&text_search=not.fts.impossible%7Cfat%7Cfun"  `shouldRespondWith`
+            [json| [{"text_search": "Es ist eine Art Spaß, das Unmögliche zu machen"}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=not.fts.impossible%7Cfat%7Cfun" `shouldRespondWith`
+            [json| [{"jsonb_search" :{"text_search": "Es ist eine Art Spaß, das Unmögliche zu machen"}}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=text_search&text_search=not.fts(english).impossible%7Cfat%7Cfun"  `shouldRespondWith`
+            [json| [{"text_search": "Es ist eine Art Spaß, das Unmögliche zu machen"}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=not.fts(english).impossible%7Cfat%7Cfun" `shouldRespondWith`
+            [json| [{"jsonb_search" :{"text_search": "Es ist eine Art Spaß, das Unmögliche zu machen"}}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=text_search&text_search=not.plfts.The%20Fat%20Rats"  `shouldRespondWith`
+            [json| [
+              {"text_search": "It's kind of fun to do the impossible"},
+              {"text_search": "But also fun to do what is possible"},
+              {"text_search": "C'est un peu amusant de faire l'impossible"},
+              {"text_search": "Es ist eine Art Spaß, das Unmögliche zu machen"}]
+            |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=not.plfts.The%20Fat%20Rats" `shouldRespondWith`
+            [json| [
+              {"jsonb_search" :{"text_search": "It's kind of fun to do the impossible"}},
+              {"jsonb_search" :{"text_search": "But also fun to do what is possible"}},
+              {"jsonb_search" :{"text_search": "C'est un peu amusant de faire l'impossible"}},
+              {"jsonb_search" :{"text_search": "Es ist eine Art Spaß, das Unmögliche zu machen"}}]
+            |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=text_search&text_search=not.wfts(english).impossible%20or%20fat%20or%20fun" `shouldRespondWith`
+            [json| [{"text_search": "Es ist eine Art Spaß, das Unmögliche zu machen"}] |]
+            { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=not.wfts(english).impossible%20or%20fat%20or%20fun" `shouldRespondWith`
+            [json| [{"jsonb_search" :{"text_search": "Es ist eine Art Spaß, das Unmögliche zu machen"}}] |]
+            { matchHeaders = [matchContentTypeJson] }
+
+        context "Use of the phraseto_tsquery function" $ do
+          it "finds matches" $ do
+            get "/tsearch_to_tsvector?select=text_search&text_search=phfts.The%20Fat%20Cats"  `shouldRespondWith`
+              [json| [{"text_search": "Fat cats ate rats"}] |]
+              { matchHeaders = [matchContentTypeJson] }
+            get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=phfts.The%20Fat%20Cats" `shouldRespondWith`
+              [json| [{"jsonb_search" :{"text_search": "Fat cats ate rats"}}] |]
+              { matchHeaders = [matchContentTypeJson] }
+
+          it "finds matches with different dictionaries and uses them as configuration for to_tsvector()" $ do
+            get "/tsearch_to_tsvector?select=text_search&text_search=phfts(german).Art%20Spass"  `shouldRespondWith`
+              [json| [{"text_search": "Es ist eine Art Spaß, das Unmögliche zu machen"}] |]
+              { matchHeaders = [matchContentTypeJson] }
+            get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=phfts(german).Art%20Spass" `shouldRespondWith`
+              [json| [{"jsonb_search" :{"text_search": "Es ist eine Art Spaß, das Unmögliche zu machen"}}] |]
+              { matchHeaders = [matchContentTypeJson] }
+
+          it "can be negated with not operator" $ do
+            get "/tsearch_to_tsvector?select=text_search&text_search=not.phfts(english).The%20Fat%20Cats"  `shouldRespondWith`
+              [json| [
+                {"text_search": "It's kind of fun to do the impossible"},
+                {"text_search": "But also fun to do what is possible"},
+                {"text_search": "C'est un peu amusant de faire l'impossible"},
+                {"text_search": "Es ist eine Art Spaß, das Unmögliche zu machen"}]
+              |]
+              { matchHeaders = [matchContentTypeJson] }
+            get "/tsearch_to_tsvector?select=jsonb_search&jsonb_search=not.phfts(english).The%20Fat%20Cats" `shouldRespondWith`
+              [json| [
+                {"jsonb_search" :{"text_search": "It's kind of fun to do the impossible"}},
+                {"jsonb_search" :{"text_search": "But also fun to do what is possible"}},
+                {"jsonb_search" :{"text_search": "C'est un peu amusant de faire l'impossible"}},
+                {"jsonb_search" :{"text_search": "Es ist eine Art Spaß, das Unmögliche zu machen"}}]
+              |]
+              { matchHeaders = [matchContentTypeJson] }
+
+          it "can be used with or query param" $ do
+            get "/tsearch_to_tsvector?select=text_search&or=(text_search.phfts(german).Art%20Spass, text_search.phfts(french).amusant, text_search.fts(english).impossible)"  `shouldRespondWith`
+              [json| [
+                {"text_search": "It's kind of fun to do the impossible"},
+                {"text_search": "C'est un peu amusant de faire l'impossible"},
+                {"text_search": "Es ist eine Art Spaß, das Unmögliche zu machen"}]
+              |]
+              { matchHeaders = [matchContentTypeJson] }
+            get "/tsearch_to_tsvector?select=jsonb_search&or=(jsonb_search.phfts(german).Art%20Spass, jsonb_search.phfts(french).amusant, jsonb_search.fts(english).impossible)" `shouldRespondWith`
+              [json| [
+                {"jsonb_search" :{"text_search": "It's kind of fun to do the impossible"}},
+                {"jsonb_search" :{"text_search": "C'est un peu amusant de faire l'impossible"}},
+                {"jsonb_search" :{"text_search": "Es ist eine Art Spaß, das Unmögliche zu machen"}}]
+              |]
+              { matchHeaders = [matchContentTypeJson] }
 
     it "matches with computed column" $
       get "/items?always_true=eq.true&order=id.asc" `shouldRespondWith`
@@ -539,107 +757,99 @@ spec actualPgVersion = do
           [json|[{"id":1,"computed_overload":true}]|]
           { matchHeaders = [matchContentTypeJson] }
 
-    when (actualPgVersion >= pgVersion110) $ do
-      describe "partitioned tables embedding" $ do
-        it "can request a table as parent from a partitioned table" $
-          get "/car_models?name=in.(DeLorean,Murcielago)&select=name,year,car_brands(name)&order=name.asc" `shouldRespondWith`
-            [json|
-              [{"name":"DeLorean","year":1981,"car_brands":{"name":"DMC"}},
-               {"name":"Murcielago","year":2001,"car_brands":{"name":"Lamborghini"}}] |]
-            { matchHeaders = [matchContentTypeJson] }
+    describe "partitioned tables embedding" $ do
+      it "can request a table as parent from a partitioned table" $
+        get "/car_models?name=in.(DeLorean,Murcielago)&select=name,year,car_brands(name)&order=name.asc" `shouldRespondWith`
+          [json|
+            [{"name":"DeLorean","year":1981,"car_brands":{"name":"DMC"}},
+             {"name":"Murcielago","year":2001,"car_brands":{"name":"Lamborghini"}}] |]
+          { matchHeaders = [matchContentTypeJson] }
 
-        it "can request partitioned tables as children from a table" $
-          get "/car_brands?select=name,car_models(name,year)&order=name.asc&car_models.order=name.asc" `shouldRespondWith`
-            [json|
-              [{"name":"DMC","car_models":[{"name":"DeLorean","year":1981}]},
-               {"name":"Ferrari","car_models":[{"name":"F310-B","year":1997}]},
-               {"name":"Lamborghini","car_models":[{"name":"Murcielago","year":2001},{"name":"Veneno","year":2013}]}] |]
-            { matchHeaders = [matchContentTypeJson] }
+      it "can request partitioned tables as children from a table" $
+        get "/car_brands?select=name,car_models(name,year)&order=name.asc&car_models.order=name.asc" `shouldRespondWith`
+          [json|
+            [{"name":"DMC","car_models":[{"name":"DeLorean","year":1981}]},
+             {"name":"Ferrari","car_models":[{"name":"F310-B","year":1997}]},
+             {"name":"Lamborghini","car_models":[{"name":"Murcielago","year":2001},{"name":"Veneno","year":2013}]}] |]
+          { matchHeaders = [matchContentTypeJson] }
 
-        when (actualPgVersion >= pgVersion121) $ do
-          it "can request tables as children from a partitioned table" $
-            get "/car_models?name=in.(DeLorean,F310-B)&select=name,year,car_racers(name)&order=name.asc" `shouldRespondWith`
-              [json|
-                [{"name":"DeLorean","year":1981,"car_racers":[]},
-                 {"name":"F310-B","year":1997,"car_racers":[{"name":"Michael Schumacher"}]}] |]
-              { matchHeaders = [matchContentTypeJson] }
+      it "can request tables as children from a partitioned table" $
+        get "/car_models?name=in.(DeLorean,F310-B)&select=name,year,car_racers(name)&order=name.asc" `shouldRespondWith`
+          [json|
+            [{"name":"DeLorean","year":1981,"car_racers":[]},
+             {"name":"F310-B","year":1997,"car_racers":[{"name":"Michael Schumacher"}]}] |]
+          { matchHeaders = [matchContentTypeJson] }
 
-          it "can request a partitioned table as parent from a table" $
-            get "/car_racers?select=name,car_models(name,year)&order=name.asc" `shouldRespondWith`
-              [json|
-                [{"name":"Alain Prost","car_models":null},
-                 {"name":"Michael Schumacher","car_models":{"name":"F310-B","year":1997}}] |]
-              { matchHeaders = [matchContentTypeJson] }
+      it "can request a partitioned table as parent from a table" $
+        get "/car_racers?select=name,car_models(name,year)&order=name.asc" `shouldRespondWith`
+          [json|
+            [{"name":"Alain Prost","car_models":null},
+             {"name":"Michael Schumacher","car_models":{"name":"F310-B","year":1997}}] |]
+          { matchHeaders = [matchContentTypeJson] }
 
-          it "can request partitioned tables as children from a partitioned table" $
-            get "/car_models?name=in.(DeLorean,Murcielago,Veneno)&select=name,year,car_model_sales(date,quantity)&order=name.asc" `shouldRespondWith`
-              [json|
-                [{"name":"DeLorean","year":1981,"car_model_sales":[{"date":"2021-01-14","quantity":7},{"date":"2021-01-15","quantity":9}]},
-                 {"name":"Murcielago","year":2001,"car_model_sales":[{"date":"2021-02-11","quantity":1},{"date":"2021-02-12","quantity":3}]},
-                 {"name":"Veneno","year":2013,"car_model_sales":[]}] |]
-              { matchHeaders = [matchContentTypeJson] }
+      it "can request partitioned tables as children from a partitioned table" $
+        get "/car_models?name=in.(DeLorean,Murcielago,Veneno)&select=name,year,car_model_sales(date,quantity)&order=name.asc" `shouldRespondWith`
+          [json|
+            [{"name":"DeLorean","year":1981,"car_model_sales":[{"date":"2021-01-14","quantity":7},{"date":"2021-01-15","quantity":9}]},
+             {"name":"Murcielago","year":2001,"car_model_sales":[{"date":"2021-02-11","quantity":1},{"date":"2021-02-12","quantity":3}]},
+             {"name":"Veneno","year":2013,"car_model_sales":[]}] |]
+          { matchHeaders = [matchContentTypeJson] }
 
-          it "can request a partitioned table as parent from a partitioned table" $ do
-            get "/car_model_sales?date=in.(2021-01-15,2021-02-11)&select=date,quantity,car_models(name,year)&order=date.asc" `shouldRespondWith`
-              [json|
-                [{"date":"2021-01-15","quantity":9,"car_models":{"name":"DeLorean","year":1981}},
-                 {"date":"2021-02-11","quantity":1,"car_models":{"name":"Murcielago","year":2001}}] |]
-              { matchHeaders = [matchContentTypeJson] }
+      it "can request a partitioned table as parent from a partitioned table" $ do
+        get "/car_model_sales?date=in.(2021-01-15,2021-02-11)&select=date,quantity,car_models(name,year)&order=date.asc" `shouldRespondWith`
+          [json|
+            [{"date":"2021-01-15","quantity":9,"car_models":{"name":"DeLorean","year":1981}},
+             {"date":"2021-02-11","quantity":1,"car_models":{"name":"Murcielago","year":2001}}] |]
+          { matchHeaders = [matchContentTypeJson] }
 
-          it "can request many to many relationships between partitioned tables ignoring the intermediate table partitions" $
-            get "/car_models?select=name,year,car_dealers(name,city)&order=name.asc&limit=4" `shouldRespondWith`
-              [json|
-                [{"name":"DeLorean","year":1981,"car_dealers":[{"name":"Springfield Cars S.A.","city":"Springfield"}]},
-                 {"name":"F310-B","year":1997,"car_dealers":[]},
-                 {"name":"Murcielago","year":2001,"car_dealers":[{"name":"The Best Deals S.A.","city":"Franklin"}]},
-                 {"name":"Veneno","year":2013,"car_dealers":[]}] |]
-              { matchStatus  = 200
-              , matchHeaders = [matchContentTypeJson]
-              }
+      it "can request many to many relationships between partitioned tables ignoring the intermediate table partitions" $
+        get "/car_models?select=name,year,car_dealers(name,city)&order=name.asc&limit=4" `shouldRespondWith`
+          [json|
+            [{"name":"DeLorean","year":1981,"car_dealers":[{"name":"Springfield Cars S.A.","city":"Springfield"}]},
+             {"name":"F310-B","year":1997,"car_dealers":[]},
+             {"name":"Murcielago","year":2001,"car_dealers":[{"name":"The Best Deals S.A.","city":"Franklin"}]},
+             {"name":"Veneno","year":2013,"car_dealers":[]}] |]
+          { matchStatus  = 200
+          , matchHeaders = [matchContentTypeJson]
+          }
 
-          it "cannot request partitions as children from a partitioned table" $
-            get "/car_models?id=in.(1,2,4)&select=id,name,car_model_sales_202101(id)&order=id.asc" `shouldRespondWith`
-              [json|
-                {"hint":"Perhaps you meant 'car_model_sales' instead of 'car_model_sales_202101'.",
-                 "details":"Searched for a foreign key relationship between 'car_models' and 'car_model_sales_202101' in the schema 'test', but no matches were found.",
-                 "code":"PGRST200",
-                 "message":"Could not find a relationship between 'car_models' and 'car_model_sales_202101' in the schema cache"} |]
-              { matchStatus  = 400
-              , matchHeaders = [matchContentTypeJson]
-              }
+      it "cannot request partitions as children from a partitioned table" $
+        get "/car_models?id=in.(1,2,4)&select=id,name,car_model_sales_202101(id)&order=id.asc" `shouldRespondWith`
+          [json|
+            {"hint":"Perhaps you meant 'car_model_sales' instead of 'car_model_sales_202101'.",
+             "details":"Searched for a foreign key relationship between 'car_models' and 'car_model_sales_202101' in the schema 'test', but no matches were found.",
+             "code":"PGRST200",
+             "message":"Could not find a relationship between 'car_models' and 'car_model_sales_202101' in the schema cache"} |]
+          { matchStatus  = 400
+          , matchHeaders = [matchContentTypeJson]
+          }
 
-          it "cannot request a partitioned table as parent from a partition" $
-            get "/car_model_sales_202101?select=id,name,car_models(id,name)&order=id.asc" `shouldRespondWith`
-              [json|
-                {"hint":"Perhaps you meant 'car_model_sales' instead of 'car_model_sales_202101'.",
-                 "details":"Searched for a foreign key relationship between 'car_model_sales_202101' and 'car_models' in the schema 'test', but no matches were found.",
-                 "code":"PGRST200",
-                 "message":"Could not find a relationship between 'car_model_sales_202101' and 'car_models' in the schema cache"} |]
-              { matchStatus  = 400
-              , matchHeaders = [matchContentTypeJson]
-              }
+      -- we only search for foreign key relationships after checking the
+      -- the existence of first table, #3869
+      it "table not found error if first table does not exist" $
+        get "/car_model_sales_202101?select=id,name,car_models(id,name)&order=id.asc" `shouldRespondWith`
+          [json| {"code":"PGRST205","details":null,"hint":"Perhaps you meant the table 'test.car_model_sales'","message":"Could not find the table 'test.car_model_sales_202101' in the schema cache"} |]
+          { matchStatus  = 404
+          , matchHeaders = [matchContentTypeJson]
+          }
 
-          it "cannot request a partition as parent from a partitioned table" $
-            get "/car_model_sales?id=in.(1,3,4)&select=id,name,car_models_default(id,name)&order=id.asc" `shouldRespondWith`
-              [json|
-                {"hint":"Perhaps you meant 'car_models' instead of 'car_models_default'.",
-                 "details":"Searched for a foreign key relationship between 'car_model_sales' and 'car_models_default' in the schema 'test', but no matches were found.",
-                 "code":"PGRST200",
-                 "message":"Could not find a relationship between 'car_model_sales' and 'car_models_default' in the schema cache"} |]
-              { matchStatus  = 400
-              , matchHeaders = [matchContentTypeJson]
-              }
+      it "cannot request a partition as parent from a partitioned table" $
+        get "/car_model_sales?id=in.(1,3,4)&select=id,name,car_models_default(id,name)&order=id.asc" `shouldRespondWith`
+          [json|
+            {"hint":"Perhaps you meant 'car_models' instead of 'car_models_default'.",
+             "details":"Searched for a foreign key relationship between 'car_model_sales' and 'car_models_default' in the schema 'test', but no matches were found.",
+             "code":"PGRST200",
+             "message":"Could not find a relationship between 'car_model_sales' and 'car_models_default' in the schema cache"} |]
+          { matchStatus  = 400
+          , matchHeaders = [matchContentTypeJson]
+          }
 
-          it "cannot request partitioned tables as children from a partition" $
-            get "/car_models_default?select=id,name,car_model_sales(id,name)&order=id.asc" `shouldRespondWith`
-              [json|
-                {"hint":"Perhaps you meant 'car_model_sales' instead of 'car_models_default'.",
-                 "details":"Searched for a foreign key relationship between 'car_models_default' and 'car_model_sales' in the schema 'test', but no matches were found.",
-                 "code":"PGRST200",
-                 "message":"Could not find a relationship between 'car_models_default' and 'car_model_sales' in the schema cache"} |]
-              { matchStatus  = 400
-              , matchHeaders = [matchContentTypeJson]
-              }
+      it "table not found error if first table does not exist" $
+        get "/car_models_default?select=id,name,car_model_sales(id,name)&order=id.asc" `shouldRespondWith`
+          [json| {"code":"PGRST205","details":null,"hint":"Perhaps you meant the table 'test.car_model_sales'","message":"Could not find the table 'test.car_models_default' in the schema cache"} |]
+          { matchStatus  = 404
+          , matchHeaders = [matchContentTypeJson]
+          }
 
     describe "view embedding" $ do
       it "can detect fk relations through views to tables in the public schema" $
@@ -1138,12 +1348,8 @@ spec actualPgVersion = do
 
     it "only returns an empty result set if the in value is empty" $
       get "/items_with_different_col_types?int_data=in.( ,3,4)"
-        `shouldRespondWith` (
-        if actualPgVersion >= pgVersion121 then
+        `shouldRespondWith`
         [json| {"hint":null,"details":null,"code":"22P02","message":"invalid input syntax for type integer: \"\""} |]
-        else
-        [json| {"hint":null,"details":null,"code":"22P02","message":"invalid input syntax for integer: \"\""} |]
-                            )
         { matchStatus = 400
         , matchHeaders = [matchContentTypeJson]
         }
@@ -1216,6 +1422,20 @@ spec actualPgVersion = do
         { matchHeaders = [matchContentTypeJson] }
       get "/users?select=*,tasks!inner()&tasks.id=eq.3" `shouldRespondWith`
         [json|[{"id":1,"name":"Angela Martin"}]|]
+        { matchHeaders = [matchContentTypeJson] }
+
+    it "works on nested relationships" $ do
+      get "/users?select=*,users_tasks(tasks(projects()))" `shouldRespondWith`
+        [json| [{"id":1,"name":"Angela Martin"}, {"id":2,"name":"Michael Scott"}, {"id":3,"name":"Dwight Schrute"}]|]
+        { matchHeaders = [matchContentTypeJson] }
+      get "/users?select=*,users_tasks!inner(tasks!inner(projects()))&users_tasks.tasks.id=eq.3" `shouldRespondWith`
+        [json| [{"id":1,"name":"Angela Martin"}]|]
+        { matchHeaders = [matchContentTypeJson] }
+      get "/users?select=*,tasks(projects(clients()),users_tasks())" `shouldRespondWith`
+        [json| [{"id":1,"name":"Angela Martin"}, {"id":2,"name":"Michael Scott"}, {"id":3,"name":"Dwight Schrute"}]|]
+        { matchHeaders = [matchContentTypeJson] }
+      get "/users?select=*,tasks!inner(projects(clients()),users_tasks(),name)&tasks.id=eq.3" `shouldRespondWith`
+        [json| [{"id":1,"name":"Angela Martin","tasks":[{"name": "Design w10"}]}]|]
         { matchHeaders = [matchContentTypeJson] }
 
   context "empty root select" $
@@ -1362,22 +1582,19 @@ spec actualPgVersion = do
         { matchStatus  = 400
         , matchHeaders = [matchContentTypeJson]
         }
-    -- Before PG 11, this will fail because we need arrays of domain type values. The docs should explain data reps are
-    -- not supported in this case.
-    when (actualPgVersion >= pgVersion110) $ do
-      it "uses text parser for filter with 'IN' predicates" $
-        get "/datarep_todos?select=id,due_at&label_color=in.(000100,01E240)" `shouldRespondWith`
-          [json| [
-            {"id":2, "due_at": "2018-01-03T00:00:00Z"},
-            {"id":3, "due_at": "2018-01-01T14:12:34.123456Z"}
-          ] |]
-          { matchHeaders = [matchContentTypeJson] }
-      it "uses text parser for filter with 'NOT IN' predicates" $
-        get "/datarep_todos?select=id,due_at&label_color=not.in.(000000,01E240)" `shouldRespondWith`
-          [json| [
-            {"id":2, "due_at": "2018-01-03T00:00:00Z"}
-          ] |]
-          { matchHeaders = [matchContentTypeJson] }
+    it "uses text parser for filter with 'IN' predicates" $
+      get "/datarep_todos?select=id,due_at&label_color=in.(000100,01E240)" `shouldRespondWith`
+        [json| [
+          {"id":2, "due_at": "2018-01-03T00:00:00Z"},
+          {"id":3, "due_at": "2018-01-01T14:12:34.123456Z"}
+        ] |]
+        { matchHeaders = [matchContentTypeJson] }
+    it "uses text parser for filter with 'NOT IN' predicates" $
+      get "/datarep_todos?select=id,due_at&label_color=not.in.(000000,01E240)" `shouldRespondWith`
+        [json| [
+          {"id":2, "due_at": "2018-01-03T00:00:00Z"}
+        ] |]
+        { matchHeaders = [matchContentTypeJson] }
     it "uses text parser on value for filter across relations" $
       get "/datarep_next_two_todos?select=id,name,datarep_todos!datarep_next_two_todos_first_item_id_fkey(label_color,due_at)&datarep_todos.label_color=neq.000100" `shouldRespondWith`
         [json| [{"id":1,"name":"school related","datarep_todos":null},{"id":2,"name":"do these first","datarep_todos":{"label_color":"#000000","due_at":"2018-01-02T00:00:00Z"}}] |]
@@ -1385,15 +1602,10 @@ spec actualPgVersion = do
     -- This is not supported by data reps (would be hard to make it work with high performance). So the test just
     -- verifies we don't panic or add inappropriate SQL to the filters.
     it "fails safely on user trying to use ilike operator on data reps column" $
-      get "/datarep_todos?select=id,name&label_color=ilike.#*100" `shouldRespondWith` (
-        if actualPgVersion >= pgVersion110 then
+      get "/datarep_todos?select=id,name&label_color=ilike.#*100" `shouldRespondWith`
         [json|
           {"code":"42883","details":null,"hint":"No operator matches the given name and argument types. You might need to add explicit type casts.","message":"operator does not exist: public.color ~~* unknown"}
         |]
-        else
-        [json|
-          {"code":"42883","details":null,"hint":"No operator matches the given name and argument type(s). You might need to add explicit type casts.","message":"operator does not exist: public.color ~~* unknown"}
-        |])
         { matchStatus  = 404
         , matchHeaders = [matchContentTypeJson]
         }
@@ -1407,3 +1619,9 @@ spec actualPgVersion = do
         { matchStatus  = 200
         , matchHeaders = [matchContentTypeJson]
         }
+
+  context "test infinite recursion error 42P17" $
+    it "return http status 500" $
+      get "/infinite_recursion?select=*" `shouldRespondWith`
+        [json|{"code":"42P17","message":"infinite recursion detected in rules for relation \"infinite_recursion\"","details":null,"hint":null}|]
+        { matchStatus = 500 }

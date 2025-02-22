@@ -15,7 +15,7 @@ Roles for Each Web User
 
 PostgREST can accommodate either viewpoint. If you treat a role as a single user then the :ref:`jwt_impersonation` does most of what you need. When an authenticated user makes a request PostgREST will switch into the database role for that user, which in addition to restricting queries, is available to SQL through the :code:`current_user` variable.
 
-You can use row-level security to flexibly restrict visibility and access for the current user. Here is an `example <https://www.2ndquadrant.com/en/blog/application-users-vs-row-level-security/>`_ from Tomas Vondra, a chat table storing messages sent between users. Users can insert rows into it to send messages to other users, and query it to see messages sent to them by other users.
+You can use row-level security to flexibly restrict visibility and access for the current user. Here is an `example <https://www.enterprisedb.com:443/blog/application-users-vs-row-level-security>`_ from Tomas Vondra, a chat table storing messages sent between users. Users can insert rows into it to send messages to other users, and query it to see messages sent to them by other users.
 
 .. code-block:: postgres
 
@@ -156,7 +156,7 @@ You can also grant execute on all functions in a schema to a higher privileged r
 Security definer
 ----------------
 
-A function is executed with the privileges of the user who calls it. This means that the user has to have all permissions to do the operations the procedure performs.
+A function is executed with the privileges of the user who calls it. This means that the user has to have all permissions to do the operations the function performs.
 If the function accesses private database objects, your :ref:`API roles <roles>` won't be able to successfully execute the function.
 
 Another option is to define the function with the :code:`SECURITY DEFINER` option. Then only one permission check will take place, the permission to call the function, and the operations in the function will have the authority of the user who owns the function itself.
@@ -166,7 +166,7 @@ Another option is to define the function with the :code:`SECURITY DEFINER` optio
   -- login as a user wich has privileges on the private schemas
 
   -- create a sample function
-  create or replace function login(email text, pass text) returns jwt_token as $$
+  create or replace function login(email text, pass text, out token text) as $$
   begin
     -- access to a private schema called 'auth'
     select auth.user_role(email, pass) into _role;
@@ -180,7 +180,7 @@ Note the ``SECURITY DEFINER`` keywords at the end of the function. See `PostgreS
 Views
 =====
 
-Views are invoked with the privileges of the view owner, much like stored procedures with the ``SECURITY DEFINER`` option. When created by a SUPERUSER role, all `row-level security <https://www.postgresql.org/docs/current/ddl-rowsecurity.html>`_ policies will be bypassed.
+Views are invoked with the privileges of the view owner, much like functions with the ``SECURITY DEFINER`` option. When created by a SUPERUSER role, all `row-level security <https://www.postgresql.org/docs/current/ddl-rowsecurity.html>`_ policies will be bypassed.
 
 If you're on PostgreSQL >= 15, this behavior can be changed by specifying the ``security_invoker`` option.
 

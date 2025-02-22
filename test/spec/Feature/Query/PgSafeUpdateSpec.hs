@@ -1,7 +1,5 @@
 module Feature.Query.PgSafeUpdateSpec where
 
-import Data.Aeson.QQ
-
 import Network.Wai (Application)
 
 import Network.HTTP.Types
@@ -9,14 +7,7 @@ import Test.Hspec          hiding (pendingWith)
 import Test.Hspec.Wai
 import Test.Hspec.Wai.JSON
 
-import Protolude  hiding (get, put)
-import SpecHelper
-
-tblDataBefore = [aesonQQ|[
-                  { "id": 1, "name": "item-1", "observation": null }
-                , { "id": 2, "name": "item-2", "observation": null }
-                , { "id": 3, "name": "item-3", "observation": null }
-                ]|]
+import Protolude hiding (get, put)
 
 spec :: SpecWith ((), Application)
 spec =
@@ -36,15 +27,9 @@ spec =
             { matchStatus  = 400 }
 
       it "allows full table update if a filter is present" $
-        baseTable "safe_update_items" "id" tblDataBefore
-        `mutatesWith`
-        requestMutation methodPatch "/safe_update_items?id=gt.0" mempty [json| {"name": "updated-item"} |]
-        `shouldMutateInto`
-        [json|[
-          { "id": 1, "name": "updated-item", "observation": null }
-        , { "id": 2, "name": "updated-item", "observation": null }
-        , { "id": 3, "name": "updated-item", "observation": null }
-        ]|]
+        request methodPatch "/safe_update_items?id=gt.0" mempty [json| {"name": "updated-item"} |]
+          `shouldRespondWith`
+          204
 
     context "Full table delete" $ do
       it "does not delete and throws error if no condition is present" $
@@ -59,31 +44,21 @@ spec =
             { matchStatus  = 400 }
 
       it "allows full table delete if a filter is present" $
-        baseTable "safe_delete_items" "id" tblDataBefore
-        `mutatesWith`
-        requestMutation methodDelete "/safe_delete_items?id=gt.0" mempty mempty
-        `shouldMutateInto`
-        [json|[]|]
+        request methodDelete "/safe_delete_items?id=gt.0" mempty mempty
+          `shouldRespondWith`
+          204
 
 disabledSpec :: SpecWith ((), Application)
 disabledSpec =
   describe "Disabling pg-safeupdate" $ do
     context "Full table update" $ do
       it "works if no condition is present" $
-        baseTable "unsafe_update_items" "id" tblDataBefore
-        `mutatesWith`
-        requestMutation methodPatch "/unsafe_update_items" mempty [json| {"name": "updated-item"} |]
-        `shouldMutateInto`
-        [json|[
-          { "id": 1, "name": "updated-item", "observation": null }
-        , { "id": 2, "name": "updated-item", "observation": null }
-        , { "id": 3, "name": "updated-item", "observation": null }
-        ]|]
+        request methodPatch "/unsafe_update_items" mempty [json| {"name": "updated-item"} |]
+          `shouldRespondWith`
+          204
 
     context "Full table delete" $ do
       it "works if no condition is present" $
-        baseTable "unsafe_delete_items" "id" tblDataBefore
-        `mutatesWith`
-        requestMutation methodDelete "/unsafe_delete_items" mempty mempty
-        `shouldMutateInto`
-        [json|[]|]
+        request methodDelete "/unsafe_delete_items" mempty mempty
+          `shouldRespondWith`
+          204

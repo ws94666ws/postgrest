@@ -1,38 +1,31 @@
-{ system ? builtins.currentSystem }:
+{ system ? builtins.currentSystem
+
+, compiler ? "ghc948"
+
+, # Commit of the Nixpkgs repository that we want to use.
+  nixpkgsVersion ? import nix/nixpkgs-version.nix
+
+, # Nix files that describe the Nixpkgs repository. We evaluate the expression
+  # using `import` below.
+  nixpkgs ? let inherit (nixpkgsVersion) owner repo rev tarballHash; in
+  builtins.fetchTarball {
+    url = "https://github.com/${owner}/${repo}/archive/${rev}.tar.gz";
+    sha256 = tarballHash;
+  }
+}:
 
 let
   name =
     "postgrest";
 
-  compiler =
-    "ghc948";
-
   # PostgREST source files, filtered based on the rules in the .gitignore files
-  # and file extensions. We want to include as litte as possible, as the files
+  # and file extensions. We want to include as little as possible, as the files
   # added here will increase the space used in the Nix store and trigger the
   # build of new Nix derivations when changed.
   src =
     pkgs.lib.sourceFilesBySuffices
       (pkgs.gitignoreSource ./.)
       [ ".cabal" ".hs" ".lhs" "LICENSE" ];
-
-  # Commit of the Nixpkgs repository that we want to use.
-  nixpkgsVersion =
-    import nix/nixpkgs-version.nix;
-
-  # Nix files that describe the Nixpkgs repository. We evaluate the expression
-  # using `import` below.
-  nixpkgs =
-    builtins.fetchTarball {
-      url = "https://github.com/nixos/nixpkgs/archive/${nixpkgsVersion.rev}.tar.gz";
-      sha256 = nixpkgsVersion.tarballHash;
-    };
-
-  nixpkgs-patched = (import nixpkgs { inherit overlays system; }).applyPatches {
-    name = "nixpkgs-patched";
-    src = nixpkgs;
-    patches = [ nix/split-sections-cross.patch ];
-  };
 
   allOverlays =
     import nix/overlays;
@@ -43,27 +36,22 @@ let
       allOverlays.checked-shell-script
       allOverlays.gitignore
       allOverlays.postgresql-libpq
-      allOverlays.postgresql-legacy
-      allOverlays.postgresql-future
-      allOverlays.postgis
       (allOverlays.haskell-packages { inherit compiler; })
       allOverlays.slocat
     ];
 
   # Evaluated expression of the Nixpkgs repository.
   pkgs =
-    import nixpkgs-patched { inherit overlays system; };
+    import nixpkgs { inherit overlays system; };
 
   postgresqlVersions =
     [
+      { name = "postgresql-17"; postgresql = pkgs.postgresql_17.withPackages (p: [ p.postgis p.pg_safeupdate ]); }
       { name = "postgresql-16"; postgresql = pkgs.postgresql_16.withPackages (p: [ p.postgis p.pg_safeupdate ]); }
       { name = "postgresql-15"; postgresql = pkgs.postgresql_15.withPackages (p: [ p.postgis p.pg_safeupdate ]); }
       { name = "postgresql-14"; postgresql = pkgs.postgresql_14.withPackages (p: [ p.postgis p.pg_safeupdate ]); }
       { name = "postgresql-13"; postgresql = pkgs.postgresql_13.withPackages (p: [ p.postgis p.pg_safeupdate ]); }
       { name = "postgresql-12"; postgresql = pkgs.postgresql_12.withPackages (p: [ p.postgis p.pg_safeupdate ]); }
-      { name = "postgresql-11"; postgresql = pkgs.postgresql_11.withPackages (p: [ p.postgis p.pg_safeupdate ]); }
-      { name = "postgresql-10"; postgresql = pkgs.postgresql_10.withPackages (p: [ p.postgis p.pg_safeupdate ]); }
-      { name = "postgresql-9.6"; postgresql = pkgs.postgresql_9_6.withPackages (p: [ p.postgis p.pg_safeupdate ]); }
     ];
 
   # Dynamic derivation for PostgREST
@@ -77,7 +65,7 @@ let
     "-f dev --test-show-detail=direct";
 
   profiledHaskellPackages =
-    pkgs.haskell.packages."${compiler}".extend (self: super:
+    pkgs.haskell.packages."${compiler}".extend (_: super:
       {
         mkDerivation =
           args:
@@ -88,7 +76,7 @@ let
   inherit (pkgs.haskell) lib;
 in
 rec {
-  inherit nixpkgs-patched pkgs;
+  inherit nixpkgs pkgs;
 
   # Derivation for the PostgREST Haskell package, including the executable,
   # libraries and documentation. We disable running the test suite on Nix
@@ -118,11 +106,15 @@ rec {
     pkgs.callPackage nix/tools/cabalTools.nix { inherit devCabalOptions postgrest; };
 
   withTools =
-    pkgs.callPackage nix/tools/withTools.nix { inherit cabalTools devCabalOptions postgresqlVersions postgrest; };
+    pkgs.callPackage nix/tools/withTools.nix { inherit postgresqlVersions postgrest; };
 
   # Development tools.
   devTools =
     pkgs.callPackage nix/tools/devTools.nix { inherit tests style devCabalOptions hsie withTools; };
+
+  # Documentation tools.
+  docs =
+    pkgs.callPackage nix/tools/docs.nix { };
 
   # Load testing tools.
   loadtest =
@@ -138,7 +130,7 @@ rec {
 
   # Scripts for publishing new releases.
   release =
-    pkgs.callPackage nix/tools/release { };
+    pkgs.callPackage nix/tools/release.nix { };
 
   # Linting and styling tools.
   style =

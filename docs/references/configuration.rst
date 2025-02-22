@@ -80,7 +80,7 @@ You can also configure the server with database settings by using a :ref:`pre-co
 
   PGRST_DB_PRE_CONFIG = "postgrest.pre_config"
 
-.. code-block:: postgresql
+.. code-block:: postgres
 
   -- create a dedicated schema, hidden from the API
   create schema postgrest;
@@ -121,8 +121,8 @@ It's possible to reload PostgREST's configuration without restarting the server.
 
 .. _config_reloading_signal:
 
-Reload with signal
-------------------
+Configuration Reload with signal
+--------------------------------
 
 To reload the configuration via signal, send a SIGUSR2 signal to the server process.
 
@@ -132,21 +132,34 @@ To reload the configuration via signal, send a SIGUSR2 signal to the server proc
 
 .. _config_reloading_notify:
 
-Reload with NOTIFY
-------------------
+Configuration Reload with NOTIFY
+--------------------------------
 
-To reload the configuration from within the database, you can use a NOTIFY command.
+To reload the configuration from within the database, you can use the ``NOTIFY`` command. See :ref:`listener`.
 
 .. code:: postgresql
 
    NOTIFY pgrst, 'reload config'
 
-The ``"pgrst"`` notification channel is enabled by default. You can name the channel with :ref:`db-channel` and enable or disable it with :ref:`db-channel-enabled`.
-
 .. _config_full_list:
 
 List of parameters
 ==================
+
+.. _admin-server-host:
+
+admin-server-host
+-----------------
+
+  =============== =======================
+  **Type**        String
+  **Default**     `server-host` value
+  **Reloadable**  N
+  **Environment** PGRST_ADMIN_SERVER_HOST
+  **In-Database** `n/a`
+  =============== =======================
+
+  Specifies the host for the :ref:`admin_server`. Defaults to :ref:`server-host` value.
 
 .. _admin-server-port:
 
@@ -161,7 +174,7 @@ admin-server-port
   **In-Database** `n/a`
   =============== =======================
 
-  Specifies the port for the :ref:`health_check` endpoints.
+  Specifies the port for the :ref:`admin_server`. Cannot be equal to :ref:`server-port`.
 
 .. _app.settings.*:
 
@@ -176,7 +189,11 @@ app.settings.*
   **In-Database** `n/a`
   =============== =======================
 
-  Arbitrary settings that can be used to pass in secret keys directly as strings, or via OS environment variables. For instance: :code:`app.settings.jwt_secret = "$(MYAPP_JWT_SECRET)"` will take :code:`MYAPP_JWT_SECRET` from the environment and make it available to postgresql functions as :code:`current_setting('app.settings.jwt_secret')`.
+  Arbitrary settings that can be used to pass in secret keys directly as strings, or via OS environment variables. For instance: :code:`app.settings.jwt_secret = "$(MYAPP_JWT_SECRET)"` will take :code:`MYAPP_JWT_SECRET` from the environment and make it available to PostgreSQL functions as :code:`current_setting('app.settings.jwt_secret')`.
+
+  When using the environment variable `PGRST_APP_SETTINGS_*` form, the remainder of the variable is used as the new name. Case is not important : :code:`PGRST_APP_SETTINGS_MY_ENV_VARIABLE=some_value` can be accessed in postgres as :code:`current_setting('app.settings.my_env_variable')`.
+
+  The :code:`current_setting` function has `an optional boolean second <https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-SET>`_ argument to avoid it from raising an error if the value was not defined. Default values to :code:`app.settings` can then be given by combining this argument with :code:`coalesce` and :code:`nullif` : :code:`coalesce(nullif(current_setting('app.settings.my_custom_variable', true), ''), 'default value')`. The use of :code:`nullif` is necessary because if set in a transaction, the setting is sometimes not "rolled back" to :code:`null`. See also :ref:`this section <guc_req_headers_cookies_claims>` for more information on this behaviour.
 
 .. _db-aggregates-enabled:
 
@@ -230,7 +247,7 @@ db-channel
   **In-Database** `n/a`
   =============== =======================
 
-  The name of the notification channel that PostgREST uses for :ref:`schema_reloading` and configuration reloading.
+  The name of the notification channel that PostgREST uses for :ref:`schema_reloading_notify` and :ref:`config_reloading_notify`.
 
 .. _db-channel-enabled:
 
@@ -292,11 +309,26 @@ db-extra-search-path
   **In-Database** pgrst.db_extra_search_path
   =============== ==========================
 
-  Extra schemas to add to the `search_path <https://www.postgresql.org/docs/current/ddl-schemas.html#DDL-SCHEMAS-PATH>`_ of every request. These schemas tables, views and stored procedures **don't get API endpoints**, they can only be referred from the database objects inside your :ref:`db-schemas`.
+  Extra schemas to add to the `search_path <https://www.postgresql.org/docs/current/ddl-schemas.html#DDL-SCHEMAS-PATH>`_ of every request. These schemas tables, views and functions **don't get API endpoints**, they can only be referred from the database objects inside your :ref:`db-schemas`.
 
   This parameter was meant to make it easier to use **PostgreSQL extensions** (like PostGIS) that are outside of the :ref:`db-schemas`.
 
   Multiple schemas can be added in a comma-separated string, e.g. ``public, extensions``.
+
+.. _db-hoisted-tx-settings:
+
+db-hoisted-tx-settings
+----------------------
+
+  =============== ==================================================================================
+  **Type**        String
+  **Default**     statement_timeout, plan_filter.statement_cost_limit, default_transaction_isolation
+  **Reloadable**  Y
+  **Environment** PGRST_DB_HOISTED_TX_SETTINGS
+  **In-Database** pgrst.db_hoisted_tx_settings
+  =============== ==================================================================================
+
+  Hoisted settings are allowed to be applied as transaction-scoped function settings. Multiple settings can be added in a comma-separated string, e.g. ``work_mem, statement_timeout``.
 
 .. _db-max-rows:
 
@@ -313,7 +345,7 @@ db-max-rows
 
   *For backwards compatibility, this config parameter is also available without prefix as "max-rows".*
 
-  A hard limit to the number of rows PostgREST will fetch from a view, table, or stored procedure. Limits payload size for accidental or malicious requests.
+  A hard limit to the number of rows PostgREST will fetch from a view, table, or function. Limits payload size for accidental or malicious requests.
 
 .. _db-plan-enabled:
 
@@ -424,7 +456,7 @@ db-pre-request
 
   *For backwards compatibility, this config parameter is also available without prefix as "pre-request".*
 
-  A schema-qualified stored procedure name to call right after the :ref:`tx_settings` are set. See :ref:`pre-request`.
+  A schema-qualified function name to call right after the :ref:`tx_settings` are set. See :ref:`pre-request`.
 
 .. _db-prepared-statements:
 
@@ -487,7 +519,7 @@ db-tx-end
   **Default**     commit
   **Reloadable**  N
   **Environment** PGRST_DB_TX_END
-  **In-Database** `n/a`
+  **In-Database** pgrst.db_tx_end
   =============== =================================
 
   Specifies how to terminate the database transactions.
@@ -569,6 +601,10 @@ jwt-aud
 
   Specifies the `JWT audience claim <https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.3>`_. If this claim is present in the client provided JWT then you must set this to the same value as in the JWT, otherwise verifying the JWT will fail.
 
+  .. warning::
+
+     Using this setting will only reject tokens with a different audience claim. Tokens **without** audience claim will still be accepted.
+
 .. _jwt-role-claim-key:
 
 jwt-role-claim-key
@@ -584,17 +620,7 @@ jwt-role-claim-key
 
   *For backwards compatibility, this config parameter is also available without prefix as "role-claim-key".*
 
-  A JSPath DSL that specifies the location of the :code:`role` key in the JWT claims. This can be used to consume a JWT provided by a third party service like Auth0, Okta or Keycloak. Usage examples:
-
-  .. code:: bash
-
-    # {"postgrest":{"roles": ["other", "author"]}}
-    # the DSL accepts characters that are alphanumerical or one of "_$@" as keys
-    jwt-role-claim-key = ".postgrest.roles[1]"
-
-    # {"https://www.example.com/role": { "key": "author }}
-    # non-alphanumerical characters can go inside quotes(escaped in the config value)
-    jwt-role-claim-key = ".\"https://www.example.com/role\".key"
+  See :ref:`jwt_role_claim_key_extract` on how to specify key paths and usage examples.
 
 .. _jwt-secret:
 
@@ -676,8 +702,35 @@ log-level
       # All the "warn" level events plus all requests (every status code) are logged
       log-level = "info"
 
+      # All the above plus events for development purposes are logged
+      # Logs connection pool events and the schema cache parsing time
+      log-level = "debug"
 
   Because currently there's no buffering for logging, the levels with minimal logging(``crit/error``) will increase throughput.
+
+.. _log-query:
+
+log-query
+---------
+
+  =============== =================================
+  **Type**        String
+  **Default**     "disabled"
+  **Reloadable**  Y
+  **Environment** PGRST_LOG_QUERY
+  **In-Database** `n/a`
+  =============== =================================
+
+  Logs the SQL query for the corresponding request at the current :ref:`log-level`.
+  See :ref:``sql_query_logs``.
+
+    .. code:: bash
+
+        # Logs the main SQL query
+        log-query = "main-query"
+
+        # Disables logging the SQL query
+        log-query = "disabled"
 
 .. _openapi-mode:
 
@@ -791,6 +844,12 @@ server-host
   * :code:`!4` - any IPv4 hostname
   * :code:`*6` - any IPv4 or IPv6 hostname, IPv6 preferred
   * :code:`!6` - any IPv6 hostname
+
+  Examples:
+
+  .. code:: bash
+
+    server-host = "127.0.0.1"
 
 .. _server-port:
 

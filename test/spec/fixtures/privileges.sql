@@ -39,15 +39,11 @@ GRANT USAGE ON SEQUENCE
     , items3_id_seq
     , callcounter_count
     , leak_id_seq
+    , surr_serial_upsert_id_seq
+    , surr_gen_default_upsert_id_seq
 TO postgrest_test_anonymous;
 
-DO $do$
-BEGIN
-  IF current_setting('server_version_num')::INT >= 100000 THEN
-    GRANT USAGE ON SEQUENCE channels_id_seq TO postgrest_test_anonymous;
-  END IF;
-END
-$do$;
+GRANT USAGE ON SEQUENCE channels_id_seq TO postgrest_test_anonymous;
 
 -- Privileges for non anonymous users
 GRANT USAGE ON SCHEMA test TO postgrest_test_author;

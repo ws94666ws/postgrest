@@ -1,4 +1,4 @@
-resolver: lts-21.7 # 2023-08-14, GHC 9.4.5
+resolver: lts-22.41 # 2024-11-10, GHC 9.6.6
 
 nix:
   packages:
@@ -6,13 +6,12 @@ nix:
     - pkgconfig
     - postgresql
     - zlib
-  # disable pure by default so that the test enviroment can be passed
+  # disable pure by default so that the test environment can be passed
   pure: false
 
 extra-deps:
-  - configurator-pg-0.2.7
-  - fuzzyset-0.3.1
-  - hasql-notifications-0.2.0.6
-  - hasql-pool-0.10
-  - megaparsec-9.2.2
-  - postgresql-libpq-0.10.0.0
+  - fuzzyset-0.2.4
+  - hasql-pool-1.0.1
+  - jose-jwt-0.10.0
+  - postgresql-libpq-0.10.1.0
+  - hasql-notifications-0.2.2.2

@@ -43,7 +43,7 @@ let
           "ARG_OPTIONAL_SINGLE([testdir], [t], [Directory to load tests and fixtures from], [./test/load])"
           "ARG_LEFTOVERS([additional vegeta arguments])"
         ];
-        inRootDir = true;
+        workingDir = "/";
       }
       ''
         # previously required settings to make this work with older branches
@@ -55,6 +55,8 @@ let
         export PGRST_DB_POOL="1"
         export PGRST_DB_TX_END="rollback-allow-override"
         export PGRST_LOG_LEVEL="crit"
+        export PGRST_JWT_SECRET="reallyreallyreallyreallyverysafe"
+        export PGRST_JWT_CACHE_MAX_LIFETIME="86400"
 
         mkdir -p "$(dirname "$_arg_output")"
         abs_output="$(realpath "$_arg_output")"
@@ -90,7 +92,7 @@ let
               __gitcomp_nl "$(__git_refs)"
             fi
           '';
-        inRootDir = true;
+        workingDir = "/";
       }
       ''
         for tgt in "''${_arg_target[@]}"; do
@@ -140,7 +142,7 @@ let
           "ARG_POSITIONAL_SINGLE([file], [Filename of result to create report for])"
           "ARG_LEFTOVERS([additional vegeta arguments])"
         ];
-        inRootDir = true;
+        workingDir = "/";
       }
       ''
         ${vegeta}/bin/vegeta report -type=json "$_arg_file" \
@@ -169,7 +171,7 @@ let
       {
         name = "postgrest-loadtest-report";
         docs = "Create a report of all loadtest reports as markdown.";
-        inRootDir = true;
+        workingDir = "/";
       }
       ''
         find loadtest -type f -iname '*.bin' -exec ${reporter} {} \; \
@@ -181,5 +183,5 @@ let
 in
 buildToolbox {
   name = "postgrest-loadtest";
-  tools = [ loadtest loadtestAgainst report ];
+  tools = { inherit loadtest loadtestAgainst report; };
 }

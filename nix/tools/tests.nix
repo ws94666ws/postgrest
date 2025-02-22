@@ -15,7 +15,6 @@
 , stdenv
 , weeder
 , withTools
-, yq
 }:
 let
   testSpec =
@@ -24,10 +23,11 @@ let
         name = "postgrest-test-spec";
         docs = "Run the Haskell test suite. Use --match PATTERN for running individual specs";
         args = [ "ARG_LEFTOVERS([hspec arguments])" ];
-        inRootDir = true;
+        workingDir = "/";
         withEnv = postgrest.env;
       }
       ''
+        ${cabal-install}/bin/cabal v2-update
         ${withTools.withPg} -f test/spec/fixtures/load.sql \
           ${cabal-install}/bin/cabal v2-run ${devCabalOptions} test:spec -- "''${_arg_leftovers[@]}"
       '';
@@ -37,10 +37,13 @@ let
       {
         name = "postgrest-test-doctests";
         docs = "Run the Haskell doctest test suite";
-        inRootDir = true;
+        workingDir = "/";
         withEnv = postgrest.env;
       }
       ''
+        ${cabal-install}/bin/cabal v2-update
+        # This makes nix-env -iA tests.doctests.bin work.
+        export NIX_GHC=${postgrest.env.NIX_GHC}
         ${cabal-install}/bin/cabal v2-run ${devCabalOptions} test:doctests
       '';
 
@@ -49,10 +52,11 @@ let
       {
         name = "postgrest-test-spec-idempotence";
         docs = "Check that the Haskell tests can be run multiple times against the same db.";
-        inRootDir = true;
+        workingDir = "/";
         withEnv = postgrest.env;
       }
       ''
+        ${cabal-install}/bin/cabal v2-update
         ${withTools.withPg} -f test/spec/fixtures/load.sql \
           ${runtimeShell} -c " \
             ${cabal-install}/bin/cabal v2-run ${devCabalOptions} test:spec && \
@@ -67,6 +71,7 @@ let
       ps.pyyaml
       ps.requests
       ps.requests-unixsocket
+      ps.syrupy
     ]);
 
   testIO =
@@ -75,29 +80,62 @@ let
         name = "postgrest-test-io";
         docs = "Run the pytest-based IO tests. Add -k to run tests that match a given expression.";
         args = [ "ARG_LEFTOVERS([pytest arguments])" ];
-        inRootDir = true;
+        workingDir = "/";
         withEnv = postgrest.env;
       }
       ''
+        ${cabal-install}/bin/cabal v2-update
         ${cabal-install}/bin/cabal v2-build ${devCabalOptions}
         ${cabal-install}/bin/cabal v2-exec -- ${withTools.withPg} -f test/io/fixtures.sql \
-          ${ioTestPython}/bin/pytest -v test/io "''${_arg_leftovers[@]}"
+          ${ioTestPython}/bin/pytest --ignore=test/io/test_big_schema.py --ignore=test/io/test_replica.py -v test/io "''${_arg_leftovers[@]}"
+      '';
+
+  testBigSchema =
+    checkedShellScript
+      {
+        name = "postgrest-test-big-schema";
+        docs = "Run a pytest-based IO test on a big schema. Add -k to run tests that match a given expression.";
+        args = [ "ARG_LEFTOVERS([pytest arguments])" ];
+        workingDir = "/";
+        withEnv = postgrest.env;
+      }
+      ''
+        ${cabal-install}/bin/cabal v2-update
+        ${cabal-install}/bin/cabal v2-build ${devCabalOptions}
+        ${cabal-install}/bin/cabal v2-exec -- ${withTools.withPg} -f test/io/big_schema.sql \
+          ${ioTestPython}/bin/pytest -v test/io/test_big_schema.py "''${_arg_leftovers[@]}"
+      '';
+
+  testReplica =
+    checkedShellScript
+      {
+        name = "postgrest-test-replica";
+        docs = "Run a pytest-based IO test on a replica. Add -k to run tests that match a given expression.";
+        args = [ "ARG_LEFTOVERS([pytest arguments])" ];
+        workingDir = "/";
+        withEnv = postgrest.env;
+      }
+      ''
+        ${cabal-install}/bin/cabal v2-update
+        ${cabal-install}/bin/cabal v2-build ${devCabalOptions}
+        ${cabal-install}/bin/cabal v2-exec -- ${withTools.withPg} --replica -f test/io/replica.sql \
+          ${ioTestPython}/bin/pytest -v test/io/test_replica.py "''${_arg_leftovers[@]}"
       '';
 
   dumpSchema =
     checkedShellScript
       {
         name = "postgrest-dump-schema";
-        docs = "Dump the loaded schema's SchemaCache as a yaml file.";
-        inRootDir = true;
+        docs = "Dump the loaded schema's SchemaCache in JSON format.";
+        workingDir = "/";
         withEnv = postgrest.env;
         withPath = [ jq ];
       }
       ''
-        ${withTools.withPg} -f test/spec/fixtures.sql \
+        ${cabal-install}/bin/cabal v2-update
+        ${withTools.withPg} -f test/spec/fixtures/load.sql \
             ${cabal-install}/bin/cabal v2-run ${devCabalOptions} --verbose=0 -- \
-            postgrest --dump-schema \
-            | ${yq}/bin/yq -y .
+            postgrest --dump-schema
       '';
 
   coverage =
@@ -106,7 +144,7 @@ let
         name = "postgrest-coverage";
         docs = "Run spec and io tests while collecting hpc coverage data. First runs weeder to detect dead code.";
         args = [ "ARG_LEFTOVERS([hpc report arguments])" ];
-        inRootDir = true;
+        workingDir = "/";
         redirectTixFiles = false;
         withEnv = postgrest.env;
         withTmpDir = true;
@@ -123,6 +161,7 @@ let
           rm -rf coverage/*
 
           # build once before running all the tests
+          ${cabal-install}/bin/cabal v2-update
           ${cabal-install}/bin/cabal v2-build ${devCabalOptions} exe:postgrest lib:postgrest test:spec
 
           (
@@ -133,7 +172,15 @@ let
           # collect all tests
           HPCTIXFILE="$tmpdir"/io.tix \
             ${withTools.withPg} -f test/io/fixtures.sql \
-            ${cabal-install}/bin/cabal v2-exec ${devCabalOptions} -- ${ioTestPython}/bin/pytest -v test/io
+            ${cabal-install}/bin/cabal v2-exec ${devCabalOptions} -- ${ioTestPython}/bin/pytest --ignore=test/io/test_big_schema.py --ignore=test/io/test_replica.py -v test/io
+
+          HPCTIXFILE="$tmpdir"/big_schema.tix \
+            ${withTools.withPg} -f test/io/big_schema.sql \
+            ${cabal-install}/bin/cabal v2-exec ${devCabalOptions} -- ${ioTestPython}/bin/pytest -v test/io/test_big_schema.py
+
+          HPCTIXFILE="$tmpdir"/replica.tix \
+            ${withTools.withPg} --replica -f test/io/replica.sql \
+            ${cabal-install}/bin/cabal v2-exec ${devCabalOptions} -- ${ioTestPython}/bin/pytest -v test/io/test_replica.py
 
           HPCTIXFILE="$tmpdir"/spec.tix \
             ${withTools.withPg} -f test/spec/fixtures/load.sql \
@@ -143,7 +190,7 @@ let
 
           # collect all the tix files
           ${ghc}/bin/hpc sum  --union --exclude=Paths_postgrest --output="$tmpdir"/tests.tix \
-            "$tmpdir"/io*.tix "$tmpdir"/spec.tix
+            "$tmpdir"/io*.tix "$tmpdir"/big_schema*.tix "$tmpdir"/replica*.tix "$tmpdir"/spec.tix
 
           # prepare the overlay
           ${ghc}/bin/hpc overlay --output="$tmpdir"/overlay.tix test/coverage.overlay
@@ -181,7 +228,7 @@ let
       {
         name = "postgrest-coverage-draft-overlay";
         docs = "Create a draft overlay from current coverage report.";
-        inRootDir = true;
+        workingDir = "/";
       }
       ''
         ${ghc}/bin/hpc draft --output=test/coverage.overlay coverage/postgrest.tix
@@ -192,14 +239,16 @@ in
 buildToolbox
 {
   name = "postgrest-tests";
-  tools =
-    [
+  tools = {
+    inherit
       testSpec
       testDoctests
       testSpecIdempotence
       testIO
+      testBigSchema
+      testReplica
       dumpSchema
       coverage
-      coverageDraftOverlay
-    ];
+      coverageDraftOverlay;
+  };
 }

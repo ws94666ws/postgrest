@@ -7,14 +7,11 @@ import Test.Hspec
 import Test.Hspec.Wai
 import Test.Hspec.Wai.JSON
 
-import PostgREST.Config.PgVersion (PgVersion, pgVersion112,
-                                   pgVersion121)
-
 import Protolude  hiding (get)
 import SpecHelper
 
-spec :: PgVersion -> SpecWith ((), Application)
-spec actualPgVersion = describe "json and jsonb operators" $ do
+spec :: SpecWith ((), Application)
+spec = describe "json and jsonb operators" $ do
   context "Shaping response with select parameter" $ do
     it "obtains a json subfield one level with casting" $
       get "/complex_items?id=eq.1&select=settings->>foo::json" `shouldRespondWith`
@@ -28,12 +25,8 @@ spec actualPgVersion = describe "json and jsonb operators" $ do
 
     it "fails on bad casting (data of the wrong format)" $
       get "/complex_items?select=settings->foo->>bar::integer"
-        `shouldRespondWith` (
-        if actualPgVersion >= pgVersion121 then
+        `shouldRespondWith`
         [json| {"hint":null,"details":null,"code":"22P02","message":"invalid input syntax for type integer: \"baz\""} |]
-        else
-        [json| {"hint":null,"details":null,"code":"22P02","message":"invalid input syntax for integer: \"baz\""} |]
-                            )
         { matchStatus  = 400 , matchHeaders = [] }
 
     it "obtains a json subfield two levels (string)" $
@@ -75,28 +68,16 @@ spec actualPgVersion = describe "json and jsonb operators" $ do
     -- this works fine for /rpc/unexistent requests, but for this case a 500 seems more appropriate
     it "fails when a double arrow ->> is followed with a single arrow ->" $ do
       get "/json_arr?select=data->>c->1"
-        `shouldRespondWith` (
-        if actualPgVersion >= pgVersion112 then
+        `shouldRespondWith`
         [json|
           {"hint":"No operator matches the given name and argument types. You might need to add explicit type casts.",
            "details":null,"code":"42883","message":"operator does not exist: text -> integer"} |]
-           else
-        [json|
-          {"hint":"No operator matches the given name and argument type(s). You might need to add explicit type casts.",
-           "details":null,"code":"42883","message":"operator does not exist: text -> integer"} |]
-                            )
         { matchStatus  = 404 , matchHeaders = [] }
       get "/json_arr?select=data->>c->b"
-        `shouldRespondWith` (
-        if actualPgVersion >= pgVersion112 then
+        `shouldRespondWith`
         [json|
           {"hint":"No operator matches the given name and argument types. You might need to add explicit type casts.",
            "details":null,"code":"42883","message":"operator does not exist: text -> unknown"} |]
-           else
-        [json|
-          {"hint":"No operator matches the given name and argument type(s). You might need to add explicit type casts.",
-           "details":null,"code":"42883","message":"operator does not exist: text -> unknown"} |]
-                            )
         { matchStatus  = 404 , matchHeaders = [] }
 
     context "with array index" $ do

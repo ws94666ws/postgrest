@@ -31,7 +31,6 @@ import Control.Monad.Extra (whenJust)
 
 import           Data.Aeson                 ((.=))
 import qualified Data.Aeson                 as JSON
-import qualified Data.Aeson.Types           as JSON
 import qualified Data.HashMap.Strict        as HM
 import qualified Data.HashMap.Strict.InsOrd as HMI
 import qualified Data.Set                   as S
@@ -41,16 +40,13 @@ import qualified Hasql.Encoders             as HE
 import qualified Hasql.Statement            as SQL
 import qualified Hasql.Transaction          as SQL
 
-import Contravariant.Extras          (contrazip2)
-import Text.InterpolatedString.Perl6 (q)
+import Data.Functor.Contravariant ((>$<))
+import NeatInterpolation          (trimming)
 
 import PostgREST.Config                      (AppConfig (..))
 import PostgREST.Config.Database             (TimezoneNames,
-                                              pgVersionStatement,
                                               toIsolationLevel)
-import PostgREST.Config.PgVersion            (PgVersion, pgVersion100,
-                                              pgVersion110,
-                                              pgVersion120)
+import PostgREST.Query.SqlFragment           (escapeIdent)
 import PostgREST.SchemaCache.Identifiers     (AccessSet, FieldName,
                                               QualifiedIdentifier (..),
                                               RelIdentifier (..),
@@ -86,23 +82,24 @@ data SchemaCache = SchemaCache
   }
 
 instance JSON.ToJSON SchemaCache where
-  toJSON (SchemaCache tabs rels routs reps _ _) = JSON.object [
+  toJSON (SchemaCache tabs rels routs reps hdlers tzs) = JSON.object [
       "dbTables"          .= JSON.toJSON tabs
     , "dbRelationships"   .= JSON.toJSON rels
     , "dbRoutines"        .= JSON.toJSON routs
     , "dbRepresentations" .= JSON.toJSON reps
-    , "dbMediaHandlers"   .= JSON.emptyArray
-    , "dbTimezones"       .= JSON.emptyArray
+    , "dbMediaHandlers"   .= JSON.toJSON hdlers
+    , "dbTimezones"       .= JSON.toJSON tzs
     ]
 
 showSummary :: SchemaCache -> Text
-showSummary (SchemaCache tbls rels routs reps mediaHdlrs _) =
+showSummary (SchemaCache tbls rels routs reps mediaHdlrs tzs) =
   T.intercalate ", "
   [ show (HM.size tbls)       <> " Relations"
   , show (HM.size rels)       <> " Relationships"
   , show (HM.size routs)      <> " Functions"
   , show (HM.size reps)       <> " Domain Representations"
   , show (HM.size mediaHdlrs) <> " Media Type Handlers"
+  , show (S.size tzs)         <> " Timezones"
   ]
 
 -- | A view foreign key or primary key dependency detected on its source table
@@ -145,19 +142,18 @@ type SqlQuery = ByteString
 
 
 querySchemaCache :: AppConfig -> SQL.Transaction SchemaCache
-querySchemaCache AppConfig{..} = do
+querySchemaCache conf@AppConfig{..} = do
   SQL.sql "set local schema ''" -- This voids the search path. The following queries need this for getting the fully qualified name(schema.name) of every db object
-  pgVer   <- SQL.statement mempty $ pgVersionStatement prepared
-  tabs    <- SQL.statement schemas $ allTables pgVer prepared
-  keyDeps <- SQL.statement (schemas, configDbExtraSearchPath) $ allViewsKeyDependencies prepared
-  m2oRels <- SQL.statement mempty $ allM2OandO2ORels pgVer prepared
-  funcs   <- SQL.statement schemas $ allFunctions pgVer prepared
+  tabs    <- SQL.statement conf $ allTables prepared
+  keyDeps <- SQL.statement conf $ allViewsKeyDependencies prepared
+  m2oRels <- SQL.statement mempty $ allM2OandO2ORels prepared
+  funcs   <- SQL.statement conf $ allFunctions prepared
   cRels   <- SQL.statement mempty $ allComputedRels prepared
-  reps    <- SQL.statement schemas $ dataRepresentations prepared
-  mHdlers <- SQL.statement schemas $ mediaHandlers pgVer prepared
+  reps    <- SQL.statement conf $ dataRepresentations prepared
+  mHdlers <- SQL.statement conf $ mediaHandlers prepared
   tzones  <- SQL.statement mempty $ timezones prepared
   _       <-
-    let sleepCall = SQL.Statement "select pg_sleep($1)" (param HE.int4) HD.noResult prepared in
+    let sleepCall = SQL.Statement "select pg_sleep($1 / 1000.0)" (param HE.int4) HD.noResult prepared in
     whenJust configInternalSCSleep (`SQL.statement` sleepCall) -- only used for testing
 
   let tabsWViewsPks = addViewPrimaryKeys tabs keyDeps
@@ -253,7 +249,7 @@ decodeRels :: HD.Result [Relationship]
 decodeRels =
  HD.rowList relRow
  where
-  relRow = (\(qi1, qi2, isSelf, constr, cols, isOneToOne) -> Relationship qi1 qi2 isSelf ((if isOneToOne then O2O else M2O) constr cols) False False) <$> row
+  relRow = (\(qi1, qi2, isSelf, constr, cols, isOneToOne)-> Relationship qi1 qi2 isSelf (if isOneToOne then O2O constr cols False else M2O constr cols) False False) <$> row
   row =
     (,,,,,) <$>
     (QualifiedIdentifier <$> column HD.text <*> column HD.text) <*>
@@ -342,10 +338,10 @@ decodeRepresentations =
 -- 2. implicit
 -- For the time being it must also be to/from JSON or text, although one can imagine a future where we support special
 -- cases like CSV specific representations.
-dataRepresentations :: Bool -> SQL.Statement [Schema] RepresentationsMap
-dataRepresentations = SQL.Statement sql (arrayParam HE.text) decodeRepresentations
+dataRepresentations :: Bool -> SQL.Statement AppConfig RepresentationsMap
+dataRepresentations = SQL.Statement sql mempty decodeRepresentations
   where
-    sql = [q|
+    sql = encodeUtf8 [trimming|
     SELECT
       c.castsource::regtype::text,
       c.casttarget::regtype::text,
@@ -364,18 +360,23 @@ dataRepresentations = SQL.Statement sql (arrayParam HE.text) decodeRepresentatio
        OR (dst_t.typtype = 'd' AND c.castsource IN ('json'::regtype::oid , 'text'::regtype::oid)))
     |]
 
-allFunctions :: PgVersion -> Bool -> SQL.Statement [Schema] RoutineMap
-allFunctions pgVer = SQL.Statement sql (arrayParam HE.text) decodeFuncs
+allFunctions :: Bool -> SQL.Statement AppConfig RoutineMap
+allFunctions = SQL.Statement funcsSqlQuery params decodeFuncs
   where
-    sql = funcsSqlQuery pgVer <> " AND pn.nspname = ANY($1)"
+    params =
+      (map escapeIdent . toList . configDbSchemas >$< arrayParam HE.text) <>
+      (configDbHoistedTxSettings >$< arrayParam HE.text)
 
-accessibleFuncs :: PgVersion -> Bool -> SQL.Statement Schema RoutineMap
-accessibleFuncs pgVer = SQL.Statement sql (param HE.text) decodeFuncs
+accessibleFuncs :: Bool -> SQL.Statement ([Schema], [Text]) RoutineMap
+accessibleFuncs = SQL.Statement sql params decodeFuncs
   where
-    sql = funcsSqlQuery pgVer <> " AND pn.nspname = $1 AND has_function_privilege(p.oid, 'execute')"
+    params =
+      (fst >$< arrayParam HE.text) <>
+      (snd >$< arrayParam HE.text)
+    sql = funcsSqlQuery <> " AND has_function_privilege(p.oid, 'execute')"
 
-funcsSqlQuery :: PgVersion -> SqlQuery
-funcsSqlQuery pgVer = [q|
+funcsSqlQuery :: SqlQuery
+funcsSqlQuery = encodeUtf8 [trimming|
  -- Recursively get the base types of domains
   WITH
   base_types AS (
@@ -412,7 +413,7 @@ funcsSqlQuery pgVer = [q|
           WHEN 'character'::regtype THEN 'character varying'
           WHEN 'character[]'::regtype THEN 'character varying[]'
           ELSE type::regtype::text
-        END, -- convert types that ignore the lenth and accept any value till maximum size
+        END, -- convert types that ignore the length and accept any value till maximum size
         idx <= (pronargs - pronargdefaults), -- is_required
         COALESCE(mode = 'v', FALSE) -- is_variadic
       ) ORDER BY idx) AS args,
@@ -452,53 +453,46 @@ funcsSqlQuery pgVer = [q|
   JOIN pg_namespace tn ON tn.oid = t.typnamespace
   LEFT JOIN pg_class comp ON comp.oid = t.typrelid
   LEFT JOIN pg_description as d ON d.objoid = p.oid
-  LEFT JOIN LATERAL unnest(proconfig) iso_config ON iso_config like 'default_transaction_isolation%'
+  LEFT JOIN LATERAL unnest(proconfig) iso_config ON iso_config LIKE 'default_transaction_isolation%'
   LEFT JOIN LATERAL (
     SELECT
       array_agg(row(
         substr(setting, 1, strpos(setting, '=') - 1),
-        lower(substr(setting, strpos(setting, '=') + 1))
+        substr(setting, strpos(setting, '=') + 1)
       )) as kvs
     FROM unnest(proconfig) setting
-    WHERE setting not LIKE 'default_transaction_isolation%'
+    WHERE setting ~ ANY($$2)
   ) func_settings ON TRUE
   WHERE t.oid <> 'trigger'::regtype AND COALESCE(a.callable, true)
-|] <> (if pgVer >= pgVersion110 then "AND prokind = 'f'" else "AND NOT (proisagg OR proiswindow)")
+  AND prokind = 'f'
+  AND p.pronamespace = ANY($$1::regnamespace[]) |]
 
 schemaDescription :: Bool -> SQL.Statement Schema (Maybe Text)
 schemaDescription =
     SQL.Statement sql (param HE.text) (join <$> HD.rowMaybe (nullableColumn HD.text))
   where
-    sql = [q|
-      select
-        description
-      from
-        pg_namespace n
-        left join pg_description d on d.objoid = n.oid
-      where
-        n.nspname = $1 |]
+    sql = "SELECT pg_catalog.obj_description($1::regnamespace, 'pg_namespace')"
 
-accessibleTables :: PgVersion -> Bool -> SQL.Statement [Schema] AccessSet
-accessibleTables pgVer =
-  SQL.Statement sql (arrayParam HE.text) decodeAccessibleIdentifiers
+accessibleTables :: Bool -> SQL.Statement [Schema] AccessSet
+accessibleTables =
+  SQL.Statement sql params decodeAccessibleIdentifiers
  where
-  sql = [q|
+  params = map escapeIdent >$< arrayParam HE.text
+  sql = encodeUtf8 [trimming|
     SELECT
       n.nspname AS table_schema,
       c.relname AS table_name
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE c.relkind IN ('v','r','m','f','p')
-    AND n.nspname NOT IN ('pg_catalog', 'information_schema')
-    AND n.nspname = ANY($1)
+    AND c.relnamespace = ANY($$1::regnamespace[])
     AND (
       pg_has_role(c.relowner, 'USAGE')
       or has_table_privilege(c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
       or has_any_column_privilege(c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')
-    ) |] <>
-    relIsPartition <>
-    "ORDER BY table_schema, table_name"
-  relIsPartition = if pgVer >= pgVersion100 then " AND not c.relispartition " else mempty
+    )
+    AND not c.relispartition
+    ORDER BY table_schema, table_name|]
 
 {-
 Adds M2O and O2O relationships for views to tables, tables to views, and views to views. The example below is taken from the test fixtures, but the views names/colnames were modified.
@@ -519,13 +513,14 @@ addViewM2OAndO2ORels :: [ViewKeyDependency] -> [Relationship] -> [Relationship]
 addViewM2OAndO2ORels keyDeps rels =
   rels ++ concatMap viewRels rels
   where
-    isM2O card = case card of {M2O _ _ -> True; _ -> False;}
-    isO2O card = case card of {O2O _ _ -> True; _ -> False;}
+    isM2O card = case card of {M2O _ _       -> True; _ -> False;}
+    isO2O card = case card of {O2O _ _ False -> True; _ -> False;}
     viewRels Relationship{relTable,relForeignTable,relCardinality=card} =
       if isM2O card || isO2O card then
       let
         cons = relCons card
         relCols = relColumns card
+        buildCard cns cls = if isM2O card then M2O cns cls else O2O cns cls False
         viewTableRels = filter (\ViewKeyDependency{keyDepTable, keyDepCons, keyDepType} -> keyDepTable == relTable        && keyDepCons == cons && keyDepType == FKDep)    keyDeps
         tableViewRels = filter (\ViewKeyDependency{keyDepTable, keyDepCons, keyDepType} -> keyDepTable == relForeignTable && keyDepCons == cons && keyDepType == FKDepRef) keyDeps
       in
@@ -533,7 +528,7 @@ addViewM2OAndO2ORels keyDeps rels =
             (keyDepView vwTbl)
             relForeignTable
             False
-            ((if isM2O card then M2O else O2O) cons $ zipWith (\(_, vCol) (_, fCol)-> (vCol, fCol)) keyDepColsVwTbl relCols)
+            (buildCard cons $ zipWith (\(_, vCol) (_, fCol)-> (vCol, fCol)) keyDepColsVwTbl relCols)
             True
             False
         | vwTbl <- viewTableRels
@@ -543,7 +538,7 @@ addViewM2OAndO2ORels keyDeps rels =
             relTable
             (keyDepView tblVw)
             False
-            ((if isM2O card then M2O else O2O) cons $ zipWith (\(tCol, _) (_, vCol) -> (tCol, vCol)) relCols keyDepColsTblVw)
+            (buildCard cons $ zipWith (\(tCol, _) (_, vCol) -> (tCol, vCol)) relCols keyDepColsTblVw)
             False
             True
         | tblVw <- tableViewRels
@@ -558,7 +553,7 @@ addViewM2OAndO2ORels keyDeps rels =
             vw1
             vw2
             (vw1 == vw2)
-            ((if isM2O card then M2O else O2O) cons $ zipWith (\(_, vcol1) (_, vcol2) -> (vcol1, vcol2)) keyDepColsVwTbl keyDepColsTblVw)
+            (buildCard cons $ zipWith (\(_, vcol1) (_, vcol2) -> (vcol1, vcol2)) keyDepColsVwTbl keyDepColsTblVw)
             True
             True
         | vwTbl <- viewTableRels
@@ -573,7 +568,7 @@ addInverseRels :: [Relationship] -> [Relationship]
 addInverseRels rels =
   rels ++
   [ Relationship ft t isSelf (O2M cons (swap <$> cols)) fTableIsView tableIsView | Relationship t ft isSelf (M2O cons cols) tableIsView fTableIsView <- rels ] ++
-  [ Relationship ft t isSelf (O2O cons (swap <$> cols)) fTableIsView tableIsView | Relationship t ft isSelf (O2O cons cols) tableIsView fTableIsView <- rels ]
+  [ Relationship ft t isSelf (O2O cons (swap <$> cols) (not isParent)) fTableIsView tableIsView | Relationship t ft isSelf (O2O cons cols isParent) tableIsView fTableIsView <- rels ]
 
 -- | Adds a m2m relationship if a table has FKs to two other tables and the FK columns are part of the PK columns
 addM2MRels :: TablesMap -> [Relationship] -> [Relationship]
@@ -605,39 +600,43 @@ addViewPrimaryKeys tabs keyDeps =
     -- * We need to choose a single reference for each column, otherwise we'd output too many columns in location headers etc.
     takeFirstPK = mapMaybe (head . snd)
 
-allTables :: PgVersion -> Bool -> SQL.Statement [Schema] TablesMap
-allTables pgVer =
-  SQL.Statement sql (arrayParam HE.text) decodeTables
+allTables :: Bool -> SQL.Statement AppConfig TablesMap
+allTables = SQL.Statement tablesSqlQuery params decodeTables
   where
-    sql = tablesSqlQuery pgVer
+    params = map escapeIdent . toList . configDbSchemas >$< arrayParam HE.text
 
 -- | Gets tables with their PK cols
-tablesSqlQuery :: PgVersion -> SqlQuery
-tablesSqlQuery pgVer =
+tablesSqlQuery :: SqlQuery
+tablesSqlQuery =
   -- the tbl_constraints/key_col_usage CTEs are based on the standard "information_schema.table_constraints"/"information_schema.key_column_usage" views,
   -- we cannot use those directly as they include the following privilege filter:
   -- (pg_has_role(ss.relowner, 'USAGE'::text) OR has_column_privilege(ss.roid, a.attnum, 'SELECT, INSERT, UPDATE, REFERENCES'::text));
   -- on the "columns" CTE, left joining on pg_depend and pg_class is used to obtain the sequence name as a column default in case there are GENERATED .. AS IDENTITY,
   -- generated columns are only available from pg >= 10 but the query is agnostic to versions. dep.deptype = 'i' is done because there are other 'a' dependencies on PKs
-  [q|
+  encodeUtf8 [trimming|
   WITH
   columns AS (
       SELECT
-          nc.nspname::name AS table_schema,
-          c.relname::name AS table_name,
+          c.oid AS relid,
           a.attname::name AS column_name,
           d.description AS description,
-  |] <> columnDefault <> [q| AS column_default,
+          -- typbasetype and typdefaultbin handles `CREATE DOMAIN .. DEFAULT val`,  attidentity/attgenerated handles generated columns, pg_get_expr gets the default of a column
+          CASE
+            WHEN (t.typbasetype != 0) AND (ad.adbin IS NULL) THEN pg_get_expr(t.typdefaultbin, 0)
+            WHEN a.attidentity  = 'd' THEN format('nextval(%L)', seq.objid::regclass)
+            WHEN a.attgenerated = 's' THEN null
+            ELSE pg_get_expr(ad.adbin, ad.adrelid)::text
+          END AS column_default,
           not (a.attnotnull OR t.typtype = 'd' AND t.typnotnull) AS is_nullable,
           CASE
               WHEN t.typtype = 'd' THEN
               CASE
-                  WHEN nbt.nspname = 'pg_catalog'::name THEN format_type(t.typbasetype, NULL::integer)
+                  WHEN bt.typnamespace = 'pg_catalog'::regnamespace THEN format_type(t.typbasetype, NULL::integer)
                   ELSE format_type(a.atttypid, a.atttypmod)
               END
               ELSE
               CASE
-                  WHEN nt.nspname = 'pg_catalog'::name THEN format_type(a.atttypid, NULL::integer)
+                  WHEN t.typnamespace = 'pg_catalog'::regnamespace THEN format_type(a.atttypid, NULL::integer)
                   ELSE format_type(a.atttypid, a.atttypmod)
               END
           END::text AS data_type,
@@ -646,130 +645,63 @@ tablesSqlQuery pgVer =
               information_schema._pg_truetypid(a.*, t.*),
               information_schema._pg_truetypmod(a.*, t.*)
           )::integer AS character_maximum_length,
-          COALESCE(bt.typname, t.typname)::name AS udt_name,
+          COALESCE(bt.oid, t.oid) AS base_type,
           a.attnum::integer AS position
       FROM pg_attribute a
           LEFT JOIN pg_description AS d
               ON d.objoid = a.attrelid and d.objsubid = a.attnum
           LEFT JOIN pg_attrdef ad
               ON a.attrelid = ad.adrelid AND a.attnum = ad.adnum
-          JOIN (pg_class c JOIN pg_namespace nc ON c.relnamespace = nc.oid)
+          JOIN pg_class c
               ON a.attrelid = c.oid
-          JOIN (pg_type t JOIN pg_namespace nt ON t.typnamespace = nt.oid)
+          JOIN pg_type t
               ON a.atttypid = t.oid
-          LEFT JOIN (pg_type bt JOIN pg_namespace nbt ON bt.typnamespace = nbt.oid)
+          LEFT JOIN pg_type bt
               ON t.typtype = 'd' AND t.typbasetype = bt.oid
-          LEFT JOIN (pg_collation co JOIN pg_namespace nco ON co.collnamespace = nco.oid)
-              ON a.attcollation = co.oid AND (nco.nspname <> 'pg_catalog'::name OR co.collname <> 'default'::name)
-          LEFT JOIN pg_depend dep
-              ON dep.refobjid = a.attrelid and dep.refobjsubid = a.attnum and dep.deptype = 'i'
-          LEFT JOIN pg_class seqclass
-              ON seqclass.oid = dep.objid
-          LEFT JOIN pg_namespace seqsch
-              ON seqsch.oid = seqclass.relnamespace
+          LEFT JOIN pg_depend seq
+              ON seq.refobjid = a.attrelid and seq.refobjsubid = a.attnum and seq.deptype = 'i'
       WHERE
-          NOT pg_is_other_temp_schema(nc.oid)
+          NOT pg_is_other_temp_schema(c.relnamespace)
           AND a.attnum > 0
           AND NOT a.attisdropped
           AND c.relkind in ('r', 'v', 'f', 'm', 'p')
-          AND nc.nspname = ANY($1)
+          AND c.relnamespace = ANY($$1::regnamespace[])
   ),
   columns_agg AS (
-    SELECT DISTINCT
-        info.table_schema AS table_schema,
-        info.table_name AS table_name,
-        array_agg(row(
-          info.column_name,
-          info.description,
-          info.is_nullable::boolean,
-          info.data_type,
-          info.nominal_data_type,
-          info.character_maximum_length,
-          info.column_default,
-          coalesce(enum_info.vals, '{}')) order by info.position) as columns
-    FROM columns info
-    LEFT OUTER JOIN (
-        SELECT
-            n.nspname AS s,
-            t.typname AS n,
-            array_agg(e.enumlabel ORDER BY e.enumsortorder) AS vals
-        FROM pg_type t
-        JOIN pg_enum e ON t.oid = e.enumtypid
-        JOIN pg_namespace n ON n.oid = t.typnamespace
-        GROUP BY s,n
-    ) AS enum_info ON info.udt_name = enum_info.n
-    WHERE info.table_schema NOT IN ('pg_catalog', 'information_schema')
-    GROUP BY info.table_schema, info.table_name
-  ),
-  tbl_constraints AS (
-      SELECT
-          c.conname::name AS constraint_name,
-          nr.nspname::name AS table_schema,
-          r.relname::name AS table_name
-      FROM pg_namespace nc
-      JOIN pg_constraint c ON nc.oid = c.connamespace
-      JOIN pg_class r ON c.conrelid = r.oid
-      JOIN pg_namespace nr ON nr.oid = r.relnamespace
-      WHERE
-        r.relkind IN ('r', 'p')
-        AND NOT pg_is_other_temp_schema(nr.oid)
-        AND c.contype = 'p'
-  ),
-  key_col_usage AS (
-      SELECT
-          ss.conname::name AS constraint_name,
-          ss.nr_nspname::name AS table_schema,
-          ss.relname::name AS table_name,
-          a.attname::name AS column_name,
-          (ss.x).n::integer AS ordinal_position,
-          CASE
-              WHEN ss.contype = 'f' THEN information_schema._pg_index_position(ss.conindid, ss.confkey[(ss.x).n])
-              ELSE NULL::integer
-          END::integer AS position_in_unique_constraint
-      FROM pg_attribute a
-      JOIN (
-        SELECT r.oid AS roid,
-          r.relname,
-          r.relowner,
-          nc.nspname AS nc_nspname,
-          nr.nspname AS nr_nspname,
-          c.oid AS coid,
-          c.conname,
-          c.contype,
-          c.conindid,
-          c.confkey,
-          information_schema._pg_expandarray(c.conkey) AS x
-        FROM pg_namespace nr
-        JOIN pg_class r
-          ON nr.oid = r.relnamespace
-        JOIN pg_constraint c
-          ON r.oid = c.conrelid
-        JOIN pg_namespace nc
-          ON c.connamespace = nc.oid
-        WHERE
-          c.contype in ('p', 'u')
-          AND r.relkind IN ('r', 'p')
-          AND NOT pg_is_other_temp_schema(nr.oid)
-      ) ss ON a.attrelid = ss.roid AND a.attnum = (ss.x).x
-      WHERE
-        NOT a.attisdropped
+    SELECT
+      relid,
+      array_agg(row(
+        column_name,
+        description,
+        is_nullable::boolean,
+        data_type,
+        nominal_data_type,
+        character_maximum_length,
+        column_default,
+        coalesce(
+          (SELECT array_agg(enumlabel ORDER BY enumsortorder) FROM pg_enum WHERE enumtypid = base_type),
+          '{}'
+        )
+      ) order by position) as columns
+    FROM columns
+    GROUP BY relid
   ),
   tbl_pk_cols AS (
     SELECT
-        key_col_usage.table_schema,
-        key_col_usage.table_name,
-        array_agg(key_col_usage.column_name) as pk_cols
-    FROM
-        tbl_constraints
-    JOIN
-        key_col_usage
-    ON
-        key_col_usage.table_name = tbl_constraints.table_name AND
-        key_col_usage.table_schema = tbl_constraints.table_schema AND
-        key_col_usage.constraint_name = tbl_constraints.constraint_name
+      r.oid AS relid,
+      array_agg(a.attname ORDER BY a.attname) AS pk_cols
+    FROM pg_class r
+    JOIN pg_constraint c
+      ON r.oid = c.conrelid
+    JOIN pg_attribute a
+      ON a.attrelid = r.oid AND a.attnum = ANY (c.conkey)
     WHERE
-        key_col_usage.table_schema NOT IN ('pg_catalog', 'information_schema')
-    GROUP BY key_col_usage.table_schema, key_col_usage.table_name
+      c.contype in ('p')
+      AND r.relkind IN ('r', 'p')
+      AND r.relnamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+      AND NOT pg_is_other_temp_schema(r.relnamespace)
+      AND NOT a.attisdropped
+    GROUP BY r.oid
   )
   SELECT
     n.nspname AS table_schema,
@@ -807,72 +739,46 @@ tablesSqlQuery pgVer =
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
   LEFT JOIN pg_description d on d.objoid = c.oid and d.objsubid = 0
-  LEFT JOIN tbl_pk_cols tpks ON n.nspname = tpks.table_schema AND c.relname = tpks.table_name
-  LEFT JOIN columns_agg cols_agg ON n.nspname = cols_agg.table_schema AND c.relname = cols_agg.table_name
+  LEFT JOIN tbl_pk_cols tpks ON c.oid = tpks.relid
+  LEFT JOIN columns_agg cols_agg ON c.oid = cols_agg.relid
   WHERE c.relkind IN ('v','r','m','f','p')
-  AND n.nspname NOT IN ('pg_catalog', 'information_schema') |] <>
-  relIsPartition <>
-  "ORDER BY table_schema, table_name"
-  where
-    relIsPartition = if pgVer >= pgVersion100 then " AND not c.relispartition " else mempty
-    columnDefault -- typbasetype and typdefaultbin handles `CREATE DOMAIN .. DEFAULT val`,  attidentity/attgenerated handles generated columns, pg_get_expr gets the default of a column
-      | pgVer >= pgVersion120 = [q|
-          CASE
-            WHEN t.typbasetype  != 0  THEN pg_get_expr(t.typdefaultbin, 0)
-            WHEN a.attidentity  = 'd' THEN format('nextval(%s)', quote_literal(seqsch.nspname || '.' || seqclass.relname))
-            WHEN a.attgenerated = 's' THEN null
-            ELSE pg_get_expr(ad.adbin, ad.adrelid)::text
-          END|]
-      | pgVer >= pgVersion100 = [q|
-          CASE
-            WHEN t.typbasetype  != 0  THEN pg_get_expr(t.typdefaultbin, 0)
-            WHEN a.attidentity = 'd' THEN format('nextval(%s)', quote_literal(seqsch.nspname || '.' || seqclass.relname))
-            ELSE pg_get_expr(ad.adbin, ad.adrelid)::text
-          END|]
-      | otherwise  = [q|
-          CASE
-            WHEN t.typbasetype  != 0  THEN pg_get_expr(t.typdefaultbin, 0)
-            ELSE pg_get_expr(ad.adbin, ad.adrelid)::text
-          END|]
+  AND c.relnamespace NOT IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+  AND not c.relispartition
+  ORDER BY table_schema, table_name|]
 
 -- | Gets many-to-one relationships and one-to-one(O2O) relationships, which are a refinement of the many-to-one's
-allM2OandO2ORels :: PgVersion -> Bool -> SQL.Statement () [Relationship]
-allM2OandO2ORels pgVer =
+allM2OandO2ORels :: Bool -> SQL.Statement () [Relationship]
+allM2OandO2ORels =
   SQL.Statement sql HE.noParams decodeRels
  where
   -- We use jsonb_agg for comparing the uniques/pks instead of array_agg to avoid the ERROR:  cannot accumulate arrays of different dimensionality
-  sql = [q|
+  sql = encodeUtf8 [trimming|
     WITH
     pks_uniques_cols AS (
       SELECT
-        connamespace,
         conrelid,
-        jsonb_agg(column_info.cols) as cols
-      FROM pg_constraint
-      JOIN lateral (
-        SELECT array_agg(cols.attname order by cols.attnum) as cols
-        FROM ( select unnest(conkey) as col) _
-        JOIN pg_attribute cols on cols.attrelid = conrelid and cols.attnum = col
-      ) column_info ON TRUE
+        array_agg(key order by key) as cols
+      FROM pg_constraint,
+      LATERAL unnest(conkey) AS _(key)
       WHERE
-        contype IN ('p', 'u') and
-        connamespace::regnamespace::text <> 'pg_catalog'
-      GROUP BY connamespace, conrelid
+        contype IN ('p', 'u')
+        AND connamespace <> 'pg_catalog'::regnamespace
+      GROUP BY oid, conrelid
     )
     SELECT
       ns1.nspname AS table_schema,
       tab.relname AS table_name,
       ns2.nspname AS foreign_table_schema,
       other.relname AS foreign_table_name,
-      (ns1.nspname, tab.relname) = (ns2.nspname, other.relname) AS is_self,
+      traint.conrelid = traint.confrelid AS is_self,
       traint.conname  AS constraint_name,
       column_info.cols_and_fcols,
-      (column_info.cols IN (SELECT * FROM jsonb_array_elements(pks_uqs.cols))) AS one_to_one
+      (column_info.cols IN (SELECT cols FROM pks_uniques_cols WHERE conrelid = traint.conrelid)) AS one_to_one
     FROM pg_constraint traint
     JOIN LATERAL (
       SELECT
         array_agg(row(cols.attname, refs.attname) order by ord) AS cols_and_fcols,
-        jsonb_agg(cols.attname order by ord) AS cols
+        array_agg(cols.attnum order by cols.attnum) AS cols
       FROM unnest(traint.conkey, traint.confkey) WITH ORDINALITY AS _(col, ref, ord)
       JOIN pg_attribute cols ON cols.attrelid = traint.conrelid AND cols.attnum = col
       JOIN pg_attribute refs ON refs.attrelid = traint.confrelid AND refs.attnum = ref
@@ -881,19 +787,15 @@ allM2OandO2ORels pgVer =
     JOIN pg_class tab ON tab.oid = traint.conrelid
     JOIN pg_class other ON other.oid = traint.confrelid
     JOIN pg_namespace ns2 ON ns2.oid = other.relnamespace
-    LEFT JOIN pks_uniques_cols pks_uqs ON pks_uqs.connamespace = traint.connamespace AND pks_uqs.conrelid = traint.conrelid
     WHERE traint.contype = 'f'
-  |] <>
-    (if pgVer >= pgVersion110
-      then " and traint.conparentid = 0 "
-      else mempty) <>
-    "ORDER BY traint.conrelid, traint.conname"
+    AND traint.conparentid = 0
+    ORDER BY traint.conrelid, traint.conname|]
 
 allComputedRels :: Bool -> SQL.Statement () [Relationship]
 allComputedRels =
   SQL.Statement sql HE.noParams (HD.rowList cRelRow)
  where
-  sql = [q|
+  sql = encodeUtf8 [trimming|
     with
     all_relations as (
       select reltype
@@ -935,14 +837,17 @@ allComputedRels =
     column HD.bool
 
 -- | Returns all the views' primary keys and foreign keys dependencies
-allViewsKeyDependencies :: Bool -> SQL.Statement ([Schema], [Schema]) [ViewKeyDependency]
+allViewsKeyDependencies :: Bool -> SQL.Statement AppConfig [ViewKeyDependency]
 allViewsKeyDependencies =
-  SQL.Statement sql (contrazip2 (arrayParam HE.text) (arrayParam HE.text)) decodeViewKeyDeps
+  SQL.Statement sql params decodeViewKeyDeps
   -- query explanation at:
   --  * rationale: https://gist.github.com/wolfgangwalther/5425d64e7b0d20aad71f6f68474d9f19
   --  * json transformation: https://gist.github.com/wolfgangwalther/3a8939da680c24ad767e93ad2c183089
   where
-    sql = [q|
+    params =
+      (map escapeIdent . toList . configDbSchemas >$< arrayParam HE.text) <>
+      (map escapeIdent . toList . configDbExtraSearchPath >$< arrayParam HE.text)
+    sql = encodeUtf8 [trimming|
       with recursive
       pks_fks as (
         -- pk + fk referencing col
@@ -971,18 +876,19 @@ allViewsKeyDependencies =
       ),
       views as (
         select
-          c.oid       as view_id,
-          n.nspname   as view_schema,
-          c.relname   as view_name,
-          r.ev_action as view_definition
+          c.oid          as view_id,
+          c.relnamespace as view_schema_id,
+          n.nspname      as view_schema,
+          c.relname      as view_name,
+          r.ev_action    as view_definition
         from pg_class c
         join pg_namespace n on n.oid = c.relnamespace
         join pg_rewrite r on r.ev_class = c.oid
-        where c.relkind in ('v', 'm') and n.nspname = ANY($1 || $2)
+        where c.relkind in ('v', 'm') and c.relnamespace = ANY($$1::regnamespace[] || $$2::regnamespace[])
       ),
       transform_json as (
         select
-          view_id, view_schema, view_name,
+          view_id, view_schema_id, view_schema, view_name,
           -- the following formatting is without indentation on purpose
           -- to allow simple diffs, with less whitespace noise
           replace(
@@ -1062,13 +968,13 @@ allViewsKeyDependencies =
       ),
       target_entries as(
         select
-          view_id, view_schema, view_name,
+          view_id, view_schema_id, view_schema, view_name,
           json_array_elements(view_definition->0->'targetList') as entry
         from transform_json
       ),
       results as(
         select
-          view_id, view_schema, view_name,
+          view_id, view_schema_id, view_schema, view_name,
           (entry->>'resno')::int as view_column,
           (entry->>'resorigtbl')::oid as resorigtbl,
           (entry->>'resorigcol')::int as resorigcol
@@ -1076,16 +982,17 @@ allViewsKeyDependencies =
       ),
       -- CYCLE detection according to PG docs: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-CYCLE
       -- Can be replaced with CYCLE clause once PG v13 is EOL.
-      recursion(view_id, view_schema, view_name, view_column, resorigtbl, resorigcol, is_cycle, path) as(
+      recursion(view_id, view_schema_id, view_schema, view_name, view_column, resorigtbl, resorigcol, is_cycle, path) as(
         select
           r.*,
           false,
           ARRAY[resorigtbl]
         from results r
-        where view_schema = ANY ($1)
+        where view_schema_id = ANY ($$1::regnamespace[])
         union all
         select
           view.view_id,
+          view.view_schema_id,
           view.view_schema,
           view.view_name,
           view.view_column,
@@ -1127,7 +1034,7 @@ allViewsKeyDependencies =
       join pg_class tbl on tbl.oid = rep.resorigtbl
       join pg_attribute col on col.attrelid = tbl.oid and col.attnum = rep.resorigcol
       join pg_namespace sch on sch.oid = tbl.relnamespace
-      group by sch.nspname, tbl.relname,  rep.view_schema, rep.view_name, pks_fks.conname, pks_fks.contype, pks_fks.ncol
+      group by sch.nspname, tbl.relname, rep.view_schema, rep.view_name, pks_fks.conname, pks_fks.contype, pks_fks.ncol
       -- make sure we only return key for which all columns are referenced in the view - no partial PKs or FKs
       having ncol = array_length(array_agg(row(col.attname, view_columns) order by pks_fks.ord), 1)
       |]
@@ -1140,11 +1047,12 @@ initialMediaHandlers =
   HM.insert (RelAnyElement, MediaType.MTGeoJSON        ) (BuiltinOvAggGeoJson, MediaType.MTGeoJSON)
   HM.empty
 
-mediaHandlers :: PgVersion -> Bool -> SQL.Statement [Schema] MediaHandlerMap
-mediaHandlers pgVer =
-  SQL.Statement sql (arrayParam HE.text) decodeMediaHandlers
+mediaHandlers :: Bool -> SQL.Statement AppConfig MediaHandlerMap
+mediaHandlers =
+  SQL.Statement sql params decodeMediaHandlers
   where
-    sql = [q|
+    params = map escapeIdent . toList . configDbSchemas >$< arrayParam HE.text
+    sql = encodeUtf8 [trimming|
       with
       all_relations as (
         select reltype
@@ -1159,8 +1067,6 @@ mediaHandlers pgVer =
           SELECT
             t.oid,
             lower(t.typname) as typname,
-            b.oid as base_oid,
-            b.typname AS basetypname,
             t.typnamespace,
             case t.typname
               when '*/*' then 'application/octet-stream'
@@ -1170,7 +1076,7 @@ mediaHandlers pgVer =
           JOIN pg_type b ON t.typbasetype = b.oid
           WHERE
             t.typbasetype <> 0 and
-            (t.typname ~* '^[A-Za-z0-9.-]+/[A-Za-z0-9.\+-]+$' or t.typname = '*/*')
+            (t.typname ~* '^[A-Za-z0-9.-]+/[A-Za-z0-9.\+-]+$$' or t.typname = '*/*')
       )
       select
         proc_schema.nspname           as handler_schema,
@@ -1186,7 +1092,7 @@ mediaHandlers pgVer =
         join pg_type      arg_name     on arg_name.oid = proc.proargtypes[0]
         join pg_namespace arg_schema   on arg_schema.oid = arg_name.typnamespace
       where
-        proc_schema.nspname = ANY($1) and
+        proc.pronamespace = ANY($$1::regnamespace[]) and
         proc.pronargs = 1 and
         arg_name.oid in (select reltype from all_relations)
       union
@@ -1202,8 +1108,8 @@ mediaHandlers pgVer =
         join media_types mtype on proc.prorettype = mtype.oid
         join pg_namespace typ_sch     on typ_sch.oid = mtype.typnamespace
       where
-        pro_sch.nspname = ANY($1) and NOT proretset
-      |] <> (if pgVer >= pgVersion110 then " AND prokind = 'f'" else " AND NOT (proisagg OR proiswindow)")
+        proc.pronamespace = ANY($$1::regnamespace[]) and NOT proretset
+        and prokind = 'f'|]
 
 decodeMediaHandlers :: HD.Result MediaHandlerMap
 decodeMediaHandlers =
@@ -1222,7 +1128,7 @@ timezones = SQL.Statement sql HE.noParams decodeTimezones
   where
     sql = "SELECT name FROM pg_timezone_names"
     decodeTimezones :: HD.Result TimezoneNames
-    decodeTimezones = S.fromList . map encodeUtf8 <$> HD.rowList (column HD.text)
+    decodeTimezones = S.fromList <$> HD.rowList (column HD.text)
 
 param :: HE.Value a -> HE.Params a
 param = HE.param . HE.nonNullable

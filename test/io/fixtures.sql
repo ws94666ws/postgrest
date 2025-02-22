@@ -1,4 +1,3 @@
--- \ir big_schema.sql big schema test currently skipped, see test_io.py
 \ir db_config.sql
 
 set check_function_bodies = false; -- to allow conditionals based on the pg version
@@ -33,6 +32,9 @@ GRANT
 
 CREATE SCHEMA v1;
 GRANT USAGE ON SCHEMA v1 TO postgrest_test_anonymous;
+
+CREATE SCHEMA test;
+GRANT USAGE ON SCHEMA test TO postgrest_test_anonymous;
 
 CREATE TABLE authors_only ();
 GRANT SELECT ON authors_only TO postgrest_test_author;
@@ -88,6 +90,10 @@ begin
   alter role postgrest_test_authenticator set pgrst.jwt_role_claim_key = 'test';
   perform pg_notify('pgrst', 'reload config');
 end $_$ volatile security definer language plpgsql ;
+
+create function notify_do_nothing() returns void as $_$
+  notify pgrst, 'nothing';
+$_$ language sql;
 
 create function reset_invalid_role_claim_key() returns void as $_$
 begin
@@ -183,8 +189,8 @@ where application_name ilike 'postgrest%'
 limit 1;
 $$;
 
-create function terminate_pgrst() returns setof record as $$
-select pg_terminate_backend(pid) from pg_stat_activity where application_name iLIKE '%postgrest%';
+create function terminate_pgrst(appname text) returns setof record as $$
+select pg_terminate_backend(pid) from pg_stat_activity where application_name iLIKE '%' || appname || '%';
 $$ language sql security definer;
 
 create or replace function one_sec_timeout() returns void as $$
@@ -199,13 +205,51 @@ create function get_postgres_version() returns int as $$
   select current_setting('server_version_num')::int;
 $$ language sql;
 
-create or replace function work_mem_test() returns text as $$
-  select current_setting('work_mem',false);
-$$ language sql set work_mem = '6000';
+create or replace function rpc_work_mem() returns items as $$
+  select 1
+$$ language sql
+set work_mem = '6000';
 
-create or replace function multiple_func_settings_test() returns setof record as $$
-  select current_setting('work_mem',false) as work_mem,
-         current_setting('statement_timeout',false) as statement_timeout;
+create or replace function rpc_with_one_hoisted() returns items as $$
+  select 1
+$$ language sql
+set work_mem = '3000'
+set statement_timeout = '7s';
+
+create or replace function rpc_with_two_hoisted() returns items as $$
+  select 1
 $$ language sql
 set work_mem = '5000'
 set statement_timeout = '10s';
+
+create function get_work_mem(items) returns text as $$
+  select current_setting('work_mem', true) as work_mem
+$$ language sql;
+
+create function get_statement_timeout(items) returns text as $$
+  select current_setting('statement_timeout', true) as statement_timeout
+$$ language sql;
+
+create function change_db_schemas_config() returns void as $_$
+begin
+  alter role postgrest_test_authenticator set pgrst.db_schemas = 'test';
+end $_$ volatile security definer language plpgsql;
+
+create function reset_db_schemas_config() returns void as $_$
+begin
+  alter role postgrest_test_authenticator reset pgrst.db_schemas;
+end $_$ volatile security definer language plpgsql ;
+
+create function test.get_current_schema() returns text as $$
+  select current_schema()::text;
+$$ language sql;
+
+create or replace function root() returns json as $_$
+  select '{"swagger": "2.0"}'::json;
+$_$ language sql;
+
+create view infinite_recursion as
+select * from projects;
+
+create or replace view infinite_recursion as
+select * from infinite_recursion;

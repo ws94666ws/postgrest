@@ -5,7 +5,7 @@ PostgREST Documentation
 
 .. container:: image-container
 
-  .. figure:: _static/logo.png
+  .. figure:: ../static/postgrest.png
 
 .. image:: https://img.shields.io/github/stars/postgrest/postgrest.svg?style=social
   :target: https://github.com/PostgREST/postgrest
@@ -16,14 +16,8 @@ PostgREST Documentation
 .. image:: https://img.shields.io/docker/pulls/postgrest/postgrest.svg
   :target: https://hub.docker.com/r/postgrest/postgrest/
 
-.. image:: https://img.shields.io/badge/gitter-join%20chat%20%E2%86%92-brightgreen.svg
-  :target: https://gitter.im/begriffs/postgrest
-
 .. image:: https://img.shields.io/badge/Donate-Patreon-orange.svg?colorB=F96854
   :target: https://www.patreon.com/postgrest
-
-.. image:: https://img.shields.io/badge/Donate-PayPal-green.svg
-  :target: https://www.paypal.com/paypalme/postgrest
 
 |
 
@@ -34,38 +28,59 @@ Sponsors
 
 .. container:: image-container
 
-  .. image:: _static/cybertec-new.png
-    :target: https://www.cybertec-postgresql.com/en/?utm_source=postgrest.org&utm_medium=referral&utm_campaign=postgrest
-    :width:  13em
+  .. container:: img-dark
 
-  .. image:: _static/gnuhost.png
-    :target: https://gnuhost.eu/?utm_source=sponsor&utm_campaign=postgrest
-    :width:  13em
+    .. image:: ../static/cybertec-dark.svg
+      :target: https://www.cybertec-postgresql.com/en/?utm_source=postgrest.org&utm_medium=referral&utm_campaign=postgrest
 
-  .. image:: _static/neon.jpg
-    :target: https://neon.tech/?utm_source=sponsor&utm_campaign=postgrest
-    :width:  13em
+  .. container:: img-light
+
+    .. image:: ../static/cybertec.svg
+      :target: https://www.cybertec-postgresql.com/en/?utm_source=postgrest.org&utm_medium=referral&utm_campaign=postgrest
+
+  .. image:: ../static/gnuhost.png
+    :target: https://euronodes.com/?utm_source=sponsor&utm_campaign=postgrest
+
+  .. container:: img-dark
+
+    .. image:: ../static/neon-dark.jpg
+      :target: https://neon.tech/?utm_source=sponsor&utm_campaign=postgrest
+
+  .. container:: img-light
+
+    .. image:: ../static/neon.jpg
+      :target: https://neon.tech/?utm_source=sponsor&utm_campaign=postgrest
 
   |
 
-  .. image:: _static/code-build.webp
-    :target: https://code.build/?utm_source=sponsor&utm_campaign=postgrest
-    :width:  13em
+  .. container:: img-dark
 
-  .. image:: _static/supabase.png
-    :target: https://supabase.com/?utm_source=postgrest%20backers&utm_medium=open%20source%20partner&utm_campaign=postgrest%20backers%20github&utm_term=homepage
-    :width:  13em
+    .. image:: ../static/code-build-dark.png
+      :target: https://code.build/?utm_source=sponsor&utm_campaign=postgrest
 
-  .. image:: _static/tembo.png
+  .. container:: img-light
+
+    .. image:: ../static/code-build.png
+      :target: https://code.build/?utm_source=sponsor&utm_campaign=postgrest
+
+  .. container:: img-dark
+
+    .. image:: ../static/supabase-dark.png
+      :target: https://supabase.com/?utm_source=postgrest%20backers&utm_medium=open%20source%20partner&utm_campaign=postgrest%20backers%20github&utm_term=homepage
+
+  .. container:: img-light
+
+    .. image:: ../static/supabase.png
+      :target: https://supabase.com/?utm_source=postgrest%20backers&utm_medium=open%20source%20partner&utm_campaign=postgrest%20backers%20github&utm_term=homepage
+
+  .. image:: ../static/tembo.png
     :target: https://tembo.io/?utm_source=sponsor&utm_campaign=postgrest
-    :width:  13em
 
   .. The static/empty.png(created with `convert -size 320x95 xc:#fcfcfc empty.png`) is an ugly workaround
      to create space and center the logos. It's not easy to layout with restructuredText.
 
   .. .. image:: _static/empty.png
        :target: #sponsors
-       :width:  13em
 
 |
 
@@ -92,7 +107,7 @@ PostgREST has a focused scope. It works well with other tools like Nginx. This f
 Getting Support
 ----------------
 
-The project has a friendly and growing community. For discussions, use the Github `discussions page <https://github.com/PostgREST/postgrest/discussions>`_ or join our `chat room <https://gitter.im/begriffs/postgrest>`_. You can also report or search for bugs/features on the Github `issues <https://github.com/PostgREST/postgrest/issues>`_ page.
+The project has a friendly and growing community. For discussions, use the Github `discussions page <https://github.com/PostgREST/postgrest/discussions>`_. You can also report or search for bugs/features on the Github `issues <https://github.com/PostgREST/postgrest/issues>`_ page.
 
 Release Notes
 -------------
@@ -126,13 +141,14 @@ Technical references for PostgREST's functionality.
 
    references/auth.rst
    references/api.rst
+   references/cli.rst
    references/transactions.rst
    references/connection_pool.rst
    references/schema_cache.rst
    references/errors.rst
    references/configuration.rst
    references/observability.rst
-   references/health_check.rst
+   references/*
 
 Explanations
 ------------
@@ -196,13 +212,12 @@ Here are some companies that use PostgREST in production.
 * `Datrium <https://www.datrium.com>`_
 * `Drip Depot <https://www.dripdepot.com>`_
 * `Image-charts <https://www.image-charts.com>`_
-* `Moat <https://www.oracle.com/advertising/measurement/>`_
+* `Moat <https://www.oracle.com/advertising/>`_
 * `Netwo <https://www.netwo.io>`_
 * `Nimbus <https://www.nimbusfacility.com/sg/home>`_
   - See how Nimbus uses PostgREST in `Paul Copplestone's blog post <https://paul.copplest.one/blog/nimbus-tech-2019-04.html>`_.
 * `OpenBooking <https://openbooking.ch>`_
 * `Redsmin <https://www.redsmin.com>`_
-* `Sompani <https://www.sompani.com>`_
 * `Supabase <https://supabase.com>`_
 
 .. Failing links

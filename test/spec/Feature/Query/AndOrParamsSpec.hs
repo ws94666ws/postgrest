@@ -7,13 +7,11 @@ import Test.Hspec
 import Test.Hspec.Wai
 import Test.Hspec.Wai.JSON
 
-import PostgREST.Config.PgVersion (PgVersion, pgVersion112)
-
 import Protolude  hiding (get)
 import SpecHelper
 
-spec :: PgVersion -> SpecWith ((), Application)
-spec actualPgVersion =
+spec :: SpecWith ((), Application)
+spec =
   describe "and/or params used for complex boolean logic" $ do
     context "used with GET" $ do
       context "or param" $ do
@@ -83,7 +81,7 @@ spec actualPgVersion =
         it "can handle is" $
           get "/entities?and=(name.is.null,arr.is.null)&select=id" `shouldRespondWith`
             [json|[{ "id": 4 }]|] { matchHeaders = [matchContentTypeJson] }
-        it "can handle fts" $ do
+        it "can handle fts on tsvector columns" $ do
           get "/entities?or=(text_search_vector.fts.bar,text_search_vector.fts.baz)&select=id" `shouldRespondWith`
             [json|[{ "id": 1 }, { "id": 2 }]|] { matchHeaders = [matchContentTypeJson] }
           get "/tsearch?or=(text_search_vector.plfts(german).Art%20Spass, text_search_vector.plfts(french).amusant%20impossible, text_search_vector.fts(english).impossible)" `shouldRespondWith`
@@ -92,21 +90,31 @@ spec actualPgVersion =
               {"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4" },
               {"text_search_vector": "'art':4 'spass':5 'unmog':7"}
             ]|] { matchHeaders = [matchContentTypeJson] }
+        it "can handle fts on text and json columns" $ do
+          get "/grandchild_entities?or=(jsonb_col.fts.bar,jsonb_col.fts.foo)&select=jsonb_col" `shouldRespondWith`
+            [json|[
+              { "jsonb_col": {"a": {"b":"foo"}} },
+              { "jsonb_col": {"b":"bar"} }]
+            |] { matchHeaders = [matchContentTypeJson] }
+          get "/tsearch_to_tsvector?and=(text_search.not.plfts(german).Art%20Spass, text_search.not.plfts(french).amusant%20impossible, text_search.not.fts(english).impossible)&select=text_search" `shouldRespondWith`
+            [json|[
+              { "text_search": "But also fun to do what is possible" },
+              { "text_search": "Fat cats ate rats" }]
+            |] { matchHeaders = [matchContentTypeJson] }
         it "can handle isdistinct" $
           get "/entities?and=(id.gte.2,arr.isdistinct.{1,2})&select=id" `shouldRespondWith`
             [json|[{ "id": 3 }, { "id": 4 }]|] { matchHeaders = [matchContentTypeJson] }
 
-        when (actualPgVersion >= pgVersion112) $
-          it "can handle wfts (websearch_to_tsquery)" $
-            get "/tsearch?or=(text_search_vector.plfts(german).Art,text_search_vector.plfts(french).amusant,text_search_vector.not.wfts(english).impossible)"
-            `shouldRespondWith`
-              [json|[
-                     {"text_search_vector": "'also':2 'fun':3 'possibl':8" },
-                     {"text_search_vector": "'ate':3 'cat':2 'fat':1 'rat':4" },
-                     {"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4" },
-                     {"text_search_vector": "'art':4 'spass':5 'unmog':7" }
-              ]|]
-              { matchHeaders = [matchContentTypeJson] }
+        it "can handle wfts (websearch_to_tsquery)" $
+          get "/tsearch?or=(text_search_vector.plfts(german).Art,text_search_vector.plfts(french).amusant,text_search_vector.not.wfts(english).impossible)"
+          `shouldRespondWith`
+            [json|[
+                   {"text_search_vector": "'also':2 'fun':3 'possibl':8" },
+                   {"text_search_vector": "'ate':3 'cat':2 'fat':1 'rat':4" },
+                   {"text_search_vector": "'amus':5 'fair':7 'impossibl':9 'peu':4" },
+                   {"text_search_vector": "'art':4 'spass':5 'unmog':7" }
+            ]|]
+            { matchHeaders = [matchContentTypeJson] }
 
         it "can handle cs and cd" $
           get "/entities?or=(arr.cs.{1,2,3},arr.cd.{1})&select=id" `shouldRespondWith`

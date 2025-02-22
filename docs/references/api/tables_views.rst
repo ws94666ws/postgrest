@@ -3,12 +3,7 @@
 Tables and Views
 ################
 
-All views and tables of the :ref:`exposed schema <schemas>` and accessible by the :ref:`active database role <roles>` are available for querying. They are exposed in one-level deep routes.
-
-.. _read:
-
-Read
-====
+All tables and views of the :ref:`exposed schema <schemas>` and accessible by the :ref:`active database role <roles>` are available for querying. They are exposed in one-level deep routes.
 
 For instance the full contents of a table `people` is returned at
 
@@ -20,8 +15,22 @@ There are no deeply/nested/routes. Each route provides OPTIONS, GET, HEAD, POST,
 
 .. note::
 
-  Why not provide nested routes? Many APIs allow nesting to retrieve related information, such as :code:`/films/1/director`. We offer a more flexible mechanism (inspired by GraphQL) to embed related information. It can handle one-to-many and many-to-many relationships. This is covered in the section about :ref:`resource_embedding`.
+  Why not provide nested routes? Many APIs allow nesting to retrieve related information, such as :code:`/films/1/director`. We offer a more flexible mechanism (inspired by GraphQL) to embed related resources. This is covered on :ref:`resource_embedding`.
 
+.. _read:
+
+Read
+====
+
+.. _head_req:
+
+GET and HEAD
+------------
+
+Using the GET method, you can retrieve tables and views rows. The default :ref:`res_format` is JSON.
+
+A HEAD method will behave identically to GET except that no response body will be returned (`RFC 2616 <https://datatracker.ietf.org/doc/html/rfc2616#section-9.4>`_).
+As an optimization, the generated query won't execute an aggregate (to avoid unnecessary data transfer).
 
 .. _h_filter:
 
@@ -63,7 +72,7 @@ imatch        :code:`~*`                ~* operator, see :ref:`pattern_matching`
 in            :code:`IN`                one of a list of values, e.g. :code:`?a=in.(1,2,3)`
                                         – also supports commas in quoted strings like
                                         :code:`?a=in.("hi,there","yes,you")`
-is            :code:`IS`                checking for exact equality (null,true,false,unknown)
+is            :code:`IS`                checking for exact equality (null,not_null,true,false,unknown)
 isdistinct    :code:`IS DISTINCT FROM`  not equal, treating :code:`NULL` as a comparable value
 fts           :code:`@@`                :ref:`fts` using to_tsquery
 plfts         :code:`@@`                :ref:`fts` using plainto_tsquery
@@ -73,7 +82,7 @@ cs            :code:`@>`                contains e.g. :code:`?tags=cs.{example, 
 cd            :code:`<@`                contained in e.g. :code:`?values=cd.{1,2,3}`
 ov            :code:`&&`                overlap (have points in common), e.g. :code:`?period=ov.[2017-01-01,2017-06-30]` –
                                         also supports array types, use curly braces instead of square brackets e.g.
-                                        :code: `?arr=ov.{1,3}`
+                                        :code:`?arr=ov.{1,3}`
 sl            :code:`<<`                strictly left of, e.g. :code:`?range=sl.(1,10)`
 sr            :code:`>>`                strictly right of
 nxr           :code:`&<`                does not extend to the right of, e.g. :code:`?range=nxr.(1,10)`
@@ -86,9 +95,9 @@ all           :code:`ALL`               comparison matches all the values in the
 any           :code:`ANY`               comparison matches any value in the list, see :ref:`modifiers`
 ============  ========================  ==================================================================================
 
-For more complicated filters you will have to create a new view in the database, or use a stored procedure. For instance, here's a view to show "today's stories" including possibly older pinned stories:
+For more complicated filters you will have to create a new view in the database, or use a function. For instance, here's a view to show "today's stories" including possibly older pinned stories:
 
-.. code-block:: postgresql
+.. code-block:: postgres
 
   CREATE VIEW fresh_stories AS
   SELECT *
@@ -120,7 +129,18 @@ You can also apply complex logic to the conditions:
 
 .. code-block:: bash
 
-  curl "http://localhost:3000/people?grade=gte.90&student=is.true&or=(age.eq.14,not.and(age.gte.11,age.lte.17))"
+  # curl "http://localhost:3000/people?grade=gte.90&student=is.true&or=(age.eq.14,not.and(age.gte.11,age.lte.17))"
+
+  curl --get "http://localhost:3000/people" \
+    -d "grade=gte.90" \
+    -d "student=is.true" \
+    -d "or=(age.eq.14,not.and(age.gte.11,age.lte.17))"
+
+If the filter value has a :ref:`reserved character <reserved-chars>`, then you need to wrap it in double quotes:
+
+.. code-block:: bash
+
+  curl -g 'http://localhost:3000/survey?or=(age_range.adj."[18,21)",age_range.cs."[30,35]")'
 
 .. _modifiers:
 
@@ -173,7 +193,21 @@ The :code:`fts` filter mentioned above has a number of options to support flexib
 
   curl "http://localhost:3000/tsearch?my_tsv=not.wfts(french).amusant"
 
-Using `websearch_to_tsquery` requires PostgreSQL of version at least 11.0 and will raise an error in earlier versions of the database.
+.. _fts_to_tsvector:
+
+Automatic ``tsvector`` conversion
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+If the filtered column is not of type ``tsvector``, then it will be automatically converted using `to_tsvector() <https://www.postgresql.org/docs/current/functions-textsearch.html#TEXTSEARCH-FUNCTIONS-TABLE>`_.
+This allows using ``fts`` on ``text`` and ``json`` types out of the box, for example.
+
+.. code-block:: bash
+
+  curl "http://localhost:3000/tsearch?my_text_column=fts(french).amusant"
+
+.. code-block:: bash
+
+  curl "http://localhost:3000/tsearch?my_json_column=not.phfts(english).The%20Fat%20Cats"
 
 .. _v_filter:
 
@@ -213,30 +247,12 @@ You can rename the columns by prefixing them with an alias followed by the colon
     {"fullName": "Jane Doe", "birthDate": "01/12/1998"}
   ]
 
-.. _casting_columns:
-
-Casting Columns
-~~~~~~~~~~~~~~~
-
-Casting the columns is possible by suffixing them with the double colon ``::`` plus the desired type.
-
-.. code-block:: bash
-
-  curl "http://localhost:3000/people?select=full_name,salary::text"
-
-.. code-block:: json
-
-  [
-    {"full_name": "John Doe", "salary": "90000.00"},
-    {"full_name": "Jane Doe", "salary": "120000.00"}
-  ]
-
 .. _json_columns:
 
 JSON Columns
-------------
+~~~~~~~~~~~~
 
-You can specify a path for a ``json`` or ``jsonb`` column using the arrow operators(``->`` or ``->>``) as per the `PostgreSQL docs <https://www.postgresql.org/docs/current/functions-json.html>`__.
+To further reduce the data transferred, you can specify a path for a ``json`` or ``jsonb`` column using the arrow operators(``->`` or ``->>``) as per the `PostgreSQL docs <https://www.postgresql.org/docs/current/functions-json.html>`__.
 
 .. code-block:: postgres
 
@@ -294,10 +310,25 @@ Note that ``->>`` is used to compare ``blood_type`` as ``text``. To compare with
     { "id": 12, "age": 30 },
     { "id": 15, "age": 35 }
   ]
+
+Ordering is also supported:
+
+.. code-block:: bash
+
+  curl "http://localhost:3000/people?select=id,json_data->age&order=json_data->>age.desc"
+
+.. code-block:: json
+
+  [
+    { "id": 15, "age": 35 },
+    { "id": 12, "age": 30 },
+    { "id": 11, "age": 25 }
+  ]
+
 .. _composite_array_columns:
 
 Composite / Array Columns
--------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The arrow operators(``->``, ``->>``) can also be used for accessing composite fields and array elements.
 
@@ -316,7 +347,11 @@ The arrow operators(``->``, ``->>``) can also be used for accessing composite fi
 
 .. code-block:: bash
 
-  curl "http://localhost:3000/countries?select=id,location->>lat,location->>long,primary_language:languages->0&location->lat=gte.19"
+  # curl "http://localhost:3000/countries?select=id,location->>lat,location->>long,primary_language:languages->0&location->lat=gte.19"
+
+  curl --get "http://localhost:3000/countries" \
+    -d "select=id,location->>lat,location->>long,primary_language:languages->0" \
+    -d "location->lat=gte.19"
 
 .. code-block:: json
 
@@ -336,6 +371,28 @@ The arrow operators(``->``, ``->>``) can also be used for accessing composite fi
   .. code-block:: postgres
 
     CREATE INDEX ON mytable ((to_jsonb(data) -> 'identification' ->> 'registration_number'));
+
+.. _casting_columns:
+
+Casting Columns
+~~~~~~~~~~~~~~~
+
+Casting the columns is possible by suffixing them with the double colon ``::`` plus the desired type.
+
+.. code-block:: bash
+
+  curl "http://localhost:3000/people?select=full_name,salary::text"
+
+.. code-block:: json
+
+  [
+    {"full_name": "John Doe", "salary": "90000.00"},
+    {"full_name": "Jane Doe", "salary": "120000.00"}
+  ]
+
+.. note::
+
+  To prevent invalidating :ref:`index_usage`, casting on horizontal filtering is not allowed. To do this, you can use :ref:`computed_cols`.
 
 .. _ordering:
 
@@ -370,13 +427,30 @@ You can also sort on fields of :ref:`composite_array_columns` or :ref:`json_colu
 
   curl "http://localhost:3000/countries?order=location->>lat"
 
-.. _head_req:
+.. _index_usage:
 
-HEAD
-----
+Index Usage
+-----------
 
-A HEAD method will behave identically to GET except that no body will be returned (`RFC 2616 <https://datatracker.ietf.org/doc/html/rfc2616#section-9.4>`_) .
-As an optimization, the generated query won't execute an aggregate (to avoid unnecessary data transfer).
+Indexes work transparently when using horizontal filtering, vertical filtering and ordering. For example, when having:
+
+.. code-block:: postgresql
+
+  create index salary_idx on employees (salary);
+
+We can confirm that a filter on employees uses the index by getting the :ref:`explain_plan`.
+
+.. code-block:: bash
+
+  curl 'localhost:3000/employees?salary=eq.36000' -H "Accept: application/vnd.pgrst.plan"
+
+  Aggregate  (cost=9.52..9.54 rows=1 width=144)
+    ->  Bitmap Heap Scan on employees  (cost=4.16..9.50 rows=2 width=136)
+          Recheck Cond: (salary = '$36,000.00'::money)
+          ->  Bitmap Index Scan on salary_idx  (cost=0.00..4.16 rows=2 width=0)
+                Index Cond: (salary = '$36,000.00'::money)
+
+There we can see `"Index Cond" <https://www.pgmustard.com/docs/explain/index-cond>`_, which confirms the index is being used by the query planner.
 
 .. _insert:
 
@@ -397,7 +471,7 @@ To create a row in a database table post a JSON object whose keys are the names 
 
   HTTP/1.1 201 Created
 
-No response body will be returned by default but you can use :ref:`prefer_return` to get the affected resource.
+No response body will be returned by default but you can use :ref:`prefer_return` to get the affected resource and :ref:`resource_embedding` to add related resources.
 
 x-www-form-urlencoded
 ---------------------
@@ -428,7 +502,7 @@ URL encoded payloads can be posted with ``Content-Type: application/x-www-form-u
 
   It's recommended that you `use triggers instead of rules <https://wiki.postgresql.org/wiki/Don%27t_Do_This#Don.27t_use_rules>`_.
   Insertion on views with complex `rules <https://www.postgresql.org/docs/current/sql-createrule.html>`_ might not work out of the box with PostgREST due to its usage of CTEs.
-  If you want to keep using rules, a workaround is to wrap the view insertion in a stored procedure and call it through the :ref:`s_procs` interface.
+  If you want to keep using rules, a workaround is to wrap the view insertion in a function and call it through the :ref:`functions` interface.
   For more details, see this `github issue <https://github.com/PostgREST/postgrest/issues/1283>`_.
 
 .. _bulk_insert:
@@ -546,7 +620,7 @@ To update a row or rows in a table, use the PATCH verb. Use :ref:`h_filter` to s
     -X PATCH -H "Content-Type: application/json" \
     -d '{ "category": "child" }'
 
-Updates also support :ref:`prefer_return` plus :ref:`v_filter`.
+Updates also support :ref:`prefer_return`, :ref:`resource_embedding` and :ref:`v_filter`.
 
 .. warning::
 
@@ -563,18 +637,34 @@ You can make an upsert with :code:`POST` and the :code:`Prefer: resolution=merge
 
 .. code-block:: bash
 
-  curl "http://localhost:3000/employees" \
+  curl "http://localhost:3000/products" \
     -X POST -H "Content-Type: application/json" \
     -H "Prefer: resolution=merge-duplicates" \
     -d @- << EOF
     [
-      { "id": 1, "name": "Old employee 1", "salary": 30000 },
-      { "id": 2, "name": "Old employee 2", "salary": 42000 },
-      { "id": 3, "name": "New employee 3", "salary": 50000 }
+      { "sku": "CL2031", "name": "Existing T-shirt", "price": 35 },
+      { "sku": "CL2040", "name": "Existing Hoodie", "price": 60 },
+      { "sku": "AC1022", "name": "New Cap", "price": 30 }
     ]
   EOF
 
-By default, upsert operates based on the primary key columns, you must specify all of them. You can also choose to ignore the duplicates with :code:`Prefer: resolution=ignore-duplicates`. This works best when the primary key is natural, but it's also possible to use it if the primary key is surrogate (example: "id serial primary key"). For more details read `this issue <https://github.com/PostgREST/postgrest/issues/1118>`_.
+By default, upsert operates based on the primary key columns, so you must specify all of them.
+You can also choose to ignore the duplicates with :code:`Prefer: resolution=ignore-duplicates`.
+Upsert works best when the primary key is natural (e.g. ``sku``).
+However, it can work with surrogate primary keys (e.g. ``id serial primary key``), if you also do a :ref:`bulk_insert_default`:
+
+.. code-block:: bash
+
+  curl "http://localhost:3000/employees?colums=id,name,salary" \
+    -X POST -H "Content-Type: application/json" \
+    -H "Prefer: resolution=merge-duplicates, missing=default" \
+    -d @- << EOF
+    [
+      { "id": 1, "name": "Existing employee 1", "salary": 30000 },
+      { "id": 2, "name": "Existing employee 2", "salary": 42000 },
+      { "name": "New employee 3", "salary": 50000 }
+    ]
+  EOF
 
 .. important::
   After creating a table or changing its primary key, you must refresh PostgREST schema cache for upsert to work properly. To learn how to refresh the cache see :ref:`schema_reloading`.
@@ -625,7 +715,7 @@ To delete rows in a table, use the DELETE verb plus :ref:`h_filter`. For instanc
 
   curl "http://localhost:3000/user?active=is.false" -X DELETE
 
-Deletions also support :ref:`prefer_return` plus :ref:`v_filter`.
+Deletions also support :ref:`prefer_return`, :ref:`resource_embedding` and :ref:`v_filter`.
 
 .. code-block:: bash
 
@@ -639,31 +729,6 @@ Deletions also support :ref:`prefer_return` plus :ref:`v_filter`.
 .. warning::
 
   Beware of accidentally deleting all rows in a table. To learn to prevent that see :ref:`block_fulltable`.
-
-.. _limited_update_delete:
-
-Limited Update/Delete
-=====================
-
-You can limit the amount of affected rows by :ref:`update` or :ref:`delete` with the ``limit`` query parameter. For this, you must add an explicit ``order`` on a unique column(s).
-
-.. code-block:: bash
-
-  curl -X PATCH "/users?limit=10&order=id&last_login=lt.2020-01-01" \
-    -H "Content-Type: application/json" \
-    -d '{ "status": "inactive" }'
-
-.. code-block:: bash
-
-  curl -X DELETE "http://localhost:3000/users?limit=10&order=id&status=eq.inactive"
-
-If your table has no unique columns, you can use the `ctid <https://www.postgresql.org/docs/current/ddl-system-columns.html>`_ system column.
-
-Using ``offset`` to target a different subset of rows is also possible.
-
-.. note::
-
-  There is no native ``UPDATE...LIMIT`` or ``DELETE...LIMIT`` support in PostgreSQL; the generated query simulates that behavior and is based on `this Crunchy Data blog post <https://www.crunchydata.com/blog/simulating-update-or-delete-with-limit-in-postgres-ctes-to-the-rescue>`_.
 
 .. raw:: html
 

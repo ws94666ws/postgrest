@@ -11,13 +11,16 @@ PostgREST automatically serves a full `OpenAPI <https://www.openapis.org/>`_ des
 
 For extra customization, the OpenAPI output contains a "description" field for every `SQL comment <https://www.postgresql.org/docs/current/sql-comment.html>`_ on any database object. For instance,
 
-.. code-block:: sql
+.. code-block:: postgres
 
   COMMENT ON SCHEMA mammals IS
     'A warm-blooded vertebrate animal of a class that is distinguished by the secretion of milk by females for the nourishment of the young';
 
   COMMENT ON TABLE monotremes IS
     'Freakish mammals lay the best eggs for breakfast';
+
+  COMMENT ON VIEW monotremes_v IS
+    'Only the platypus is publicly visible';
 
   COMMENT ON COLUMN monotremes.has_venomous_claw IS
     'Sometimes breakfast is not worth it';
@@ -26,7 +29,7 @@ These unsavory comments will appear in the generated JSON as the fields, ``info.
 
 Also if you wish to generate a ``summary`` field you can do it by having a multiple line comment, the ``summary`` will be the first line and the ``description`` the lines that follow it:
 
-.. code-block:: plpgsql
+.. code-block:: postgres
 
   COMMENT ON TABLE entities IS
     $$Entities summary
@@ -37,7 +40,7 @@ Also if you wish to generate a ``summary`` field you can do it by having a multi
 
 Similarly, you can override the API title by commenting the schema.
 
-.. code-block:: plpgsql
+.. code-block:: postgres
 
   COMMENT ON SCHEMA api IS
   $$FooBar API

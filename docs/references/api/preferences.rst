@@ -15,7 +15,6 @@ The following preferences are supported.
 - ``Prefer: missing``. See :ref:`bulk_insert_default`.
 - ``Prefer: max-affected``, See :ref:`prefer_max_affected`.
 - ``Prefer: tx``. See :ref:`prefer_tx`.
-- ``Prefer: params``. See :ref:`prefer_params`.
 
 .. _prefer_handling:
 
@@ -63,7 +62,7 @@ The server ignores unrecognized or unfulfillable preferences by default. You can
 Timezone
 ========
 
-The ``timezone`` preference allows you to change the `PostgreSQL timezone <https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-TIMEZONE>`_. It accepts all timezones in `pg_timezone_names <https://www.postgresql.org/docs/current/view-pg-timezone-names.html>`_.
+The ``timezone`` preference allows you to change the `PostgreSQL timezone <https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-TIMEZONE>`_. It accepts all time zones in `pg_timezone_names <https://www.postgresql.org/docs/current/view-pg-timezone-names.html>`_.
 
 
 .. code-block:: bash
@@ -85,7 +84,7 @@ The ``timezone`` preference allows you to change the `PostgreSQL timezone <https
     {"t":"2023-10-18T09:37:59.611-07:00"}
   ]
 
-For an invalid timezone, PostgREST returns values with the default timezone (configured on ``postgresql.conf`` or as a setting on the :ref:`authenticator <roles>`).
+For an invalid time zone, PostgREST returns values with the default time zone (configured on ``postgresql.conf`` or as a setting on the :ref:`authenticator <roles>`).
 
 .. code-block:: bash
 
@@ -107,7 +106,7 @@ For an invalid timezone, PostgREST returns values with the default timezone (con
 
 Note that there's no ``Preference-Applied`` in the response.
 
-However, with ``handling=strict``, an invalid timezone preference will throw an :ref:`error <pgrst122>`.
+However, with ``handling=strict``, an invalid time zone preference will throw an :ref:`error <pgrst122>`.
 
 .. code-block:: bash
 
@@ -224,31 +223,3 @@ To illustrate the use of this preference, consider the following scenario where 
       "details": "The query affects 14 rows",
       "hint": null
   }
-
-.. _prefer_params:
-
-Single JSON object as Function Parameter
-----------------------------------------
-
-.. warning::
-
-  Using this preference is **deprecated** in favor of :ref:`s_proc_single_json`.
-
-:code:`Prefer: params=single-object` allows sending the JSON request body as the single argument of a :ref:`function <s_procs>`.
-
-.. code-block:: plpgsql
-
-  CREATE FUNCTION mult_them(param json) RETURNS int AS $$
-    SELECT (param->>'x')::int * (param->>'y')::int
-  $$ LANGUAGE SQL;
-
-.. code-block:: bash
-
-  curl "http://localhost:3000/rpc/mult_them" \
-    -X POST -H "Content-Type: application/json" \
-    -H "Prefer: params=single-object" \
-    -d '{ "x": 4, "y": 2 }'
-
-.. code-block:: json
-
-  8

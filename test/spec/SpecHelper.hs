@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 module SpecHelper where
 
 import           Control.Lens           ((^?))
@@ -23,30 +24,42 @@ import Text.Regex.TDFA      ((=~))
 import Network.HTTP.Types
 import Test.Hspec
 import Test.Hspec.Wai
-import Test.Hspec.Wai.JSON
 import Text.Heredoc
 
 import Data.String                       (String)
 import PostgREST.Config                  (AppConfig (..),
                                           JSPathExp (..),
                                           LogLevel (..),
+                                          LogQuery (..),
                                           OpenAPIMode (..),
                                           parseSecret)
 import PostgREST.SchemaCache.Identifiers (QualifiedIdentifier (..))
 import Protolude                         hiding (get, toS)
 import Protolude.Conv                    (toS)
 
+filterAndMatchCT :: BS.ByteString -> MatchHeader
+filterAndMatchCT val = MatchHeader $ \headers _ ->
+        case filter (\(n,_) -> n == hContentType) headers of
+          [(_,v)] -> if v == val
+                     then Nothing
+                     else Just $ "missing value:" <> toS val <> "\n"
+          _   -> Just "unexpected header: zero or multiple headers present\n"
+
 matchContentTypeJson :: MatchHeader
-matchContentTypeJson = "Content-Type" <:> "application/json; charset=utf-8"
+matchContentTypeJson =
+  filterAndMatchCT "application/json; charset=utf-8"
 
 matchContentTypeSingular :: MatchHeader
-matchContentTypeSingular = "Content-Type" <:> "application/vnd.pgrst.object+json; charset=utf-8"
+matchContentTypeSingular =
+  filterAndMatchCT "application/vnd.pgrst.object+json; charset=utf-8"
 
 matchCTArrayStrip :: MatchHeader
-matchCTArrayStrip = "Content-Type" <:> "application/vnd.pgrst.array+json;nulls=stripped; charset=utf-8"
+matchCTArrayStrip =
+  filterAndMatchCT "application/vnd.pgrst.array+json;nulls=stripped; charset=utf-8"
 
 matchCTSingularStrip :: MatchHeader
-matchCTSingularStrip = "Content-Type" <:> "application/vnd.pgrst.object+json;nulls=stripped; charset=utf-8"
+matchCTSingularStrip =
+  filterAndMatchCT "application/vnd.pgrst.object+json;nulls=stripped; charset=utf-8"
 
 matchHeaderValuePresent :: HeaderName -> BS.ByteString -> MatchHeader
 matchHeaderValuePresent name val = MatchHeader $ \headers _ ->
@@ -95,7 +108,7 @@ validateOpenApiResponse headers = do
 
 
 baseCfg :: AppConfig
-baseCfg = let secret = Just $ encodeUtf8 "reallyreallyreallyreallyverysafe" in
+baseCfg = let secret = encodeUtf8 "reallyreallyreallyreallyverysafe" in
   AppConfig {
     configAppSettings               = [ ("app.settings.app_host", "localhost") , ("app.settings.external_api_secret", "0123456789abcdef") ]
   , configDbAggregates              = False
@@ -103,6 +116,7 @@ baseCfg = let secret = Just $ encodeUtf8 "reallyreallyreallyreallyverysafe" in
   , configDbChannel                 = mempty
   , configDbChannelEnabled          = True
   , configDbExtraSearchPath         = []
+  , configDbHoistedTxSettings       = ["default_transaction_isolation","plan_filter.statement_cost_limit","statement_timeout"]
   , configDbMaxRows                 = Nothing
   , configDbPlanEnabled             = False
   , configDbPoolSize                = 10
@@ -118,13 +132,14 @@ baseCfg = let secret = Just $ encodeUtf8 "reallyreallyreallyreallyverysafe" in
   , configDbPreConfig               = Nothing
   , configDbUri                     = "postgresql://"
   , configFilePath                  = Nothing
-  , configJWKS                      = parseSecret <$> secret
+  , configJWKS                      = rightToMaybe $ parseSecret secret
   , configJwtAudience               = Nothing
   , configJwtRoleClaimKey           = [JSPKey "role"]
-  , configJwtSecret                 = secret
+  , configJwtSecret                 = Just secret
   , configJwtSecretIsBase64         = False
   , configJwtCacheMaxLifetime       = 0
   , configLogLevel                  = LogCrit
+  , configLogQuery                  = LogQueryDisabled
   , configOpenApiMode               = OAFollowPriv
   , configOpenApiSecurityActive     = False
   , configOpenApiServerProxyUri     = Nothing
@@ -136,6 +151,7 @@ baseCfg = let secret = Just $ encodeUtf8 "reallyreallyreallyreallyverysafe" in
   , configServerUnixSocketMode      = 432
   , configDbTxAllowOverride         = True
   , configDbTxRollbackAll           = True
+  , configAdminServerHost           = "localhost"
   , configAdminServerPort           = Nothing
   , configRoleSettings              = mempty
   , configRoleIsoLvl                = mempty
@@ -181,39 +197,36 @@ testPlanEnabledCfg = baseCfg { configDbPlanEnabled = True }
 
 testCfgBinaryJWT :: AppConfig
 testCfgBinaryJWT =
-  let secret = Just . B64.decodeLenient $ "cmVhbGx5cmVhbGx5cmVhbGx5cmVhbGx5dmVyeXNhZmU=" in
+  let secret = B64.decodeLenient "cmVhbGx5cmVhbGx5cmVhbGx5cmVhbGx5dmVyeXNhZmU=" in
   baseCfg {
-    configJwtSecret = secret
-  , configJWKS = parseSecret <$> secret
+    configJwtSecret = Just secret
+  , configJWKS = rightToMaybe $ parseSecret secret
   }
 
 testCfgAudienceJWT :: AppConfig
 testCfgAudienceJWT =
-  let secret = Just . B64.decodeLenient $ "cmVhbGx5cmVhbGx5cmVhbGx5cmVhbGx5dmVyeXNhZmU=" in
+  let secret = B64.decodeLenient "cmVhbGx5cmVhbGx5cmVhbGx5cmVhbGx5dmVyeXNhZmU=" in
   baseCfg {
-    configJwtSecret = secret
+    configJwtSecret = Just secret
   , configJwtAudience = Just "youraudience"
-  , configJWKS = parseSecret <$> secret
+  , configJWKS = rightToMaybe $ parseSecret secret
   }
 
 testCfgAsymJWK :: AppConfig
 testCfgAsymJWK =
-  let secret = Just $ encodeUtf8 [str|{"alg":"RS256","e":"AQAB","key_ops":["verify"],"kty":"RSA","n":"0etQ2Tg187jb04MWfpuogYGV75IFrQQBxQaGH75eq_FpbkyoLcEpRUEWSbECP2eeFya2yZ9vIO5ScD-lPmovePk4Aa4SzZ8jdjhmAbNykleRPCxMg0481kz6PQhnHRUv3nF5WP479CnObJKqTVdEagVL66oxnX9VhZG9IZA7k0Th5PfKQwrKGyUeTGczpOjaPqbxlunP73j9AfnAt4XCS8epa-n3WGz1j-wfpr_ys57Aq-zBCfqP67UYzNpeI1AoXsJhD9xSDOzvJgFRvc3vm2wjAW4LEMwi48rCplamOpZToIHEPIaPzpveYQwDnB1HFTR1ove9bpKJsHmi-e2uzQ","use":"sig"}|]
+  let secret = encodeUtf8 [str|{"alg":"RS256","e":"AQAB","key_ops":["verify"],"kty":"RSA","n":"0etQ2Tg187jb04MWfpuogYGV75IFrQQBxQaGH75eq_FpbkyoLcEpRUEWSbECP2eeFya2yZ9vIO5ScD-lPmovePk4Aa4SzZ8jdjhmAbNykleRPCxMg0481kz6PQhnHRUv3nF5WP479CnObJKqTVdEagVL66oxnX9VhZG9IZA7k0Th5PfKQwrKGyUeTGczpOjaPqbxlunP73j9AfnAt4XCS8epa-n3WGz1j-wfpr_ys57Aq-zBCfqP67UYzNpeI1AoXsJhD9xSDOzvJgFRvc3vm2wjAW4LEMwi48rCplamOpZToIHEPIaPzpveYQwDnB1HFTR1ove9bpKJsHmi-e2uzQ","use":"sig"}|]
   in baseCfg {
-    configJwtSecret = secret
-  , configJWKS = parseSecret <$> secret
+    configJwtSecret = Just secret
+  , configJWKS = rightToMaybe $ parseSecret secret
   }
 
 testCfgAsymJWKSet :: AppConfig
 testCfgAsymJWKSet =
-  let secret = Just $ encodeUtf8 [str|{"keys": [{"alg":"RS256","e":"AQAB","key_ops":["verify"],"kty":"RSA","n":"0etQ2Tg187jb04MWfpuogYGV75IFrQQBxQaGH75eq_FpbkyoLcEpRUEWSbECP2eeFya2yZ9vIO5ScD-lPmovePk4Aa4SzZ8jdjhmAbNykleRPCxMg0481kz6PQhnHRUv3nF5WP479CnObJKqTVdEagVL66oxnX9VhZG9IZA7k0Th5PfKQwrKGyUeTGczpOjaPqbxlunP73j9AfnAt4XCS8epa-n3WGz1j-wfpr_ys57Aq-zBCfqP67UYzNpeI1AoXsJhD9xSDOzvJgFRvc3vm2wjAW4LEMwi48rCplamOpZToIHEPIaPzpveYQwDnB1HFTR1ove9bpKJsHmi-e2uzQ","use":"sig"}]}|]
+  let secret = encodeUtf8 [str|{"keys": [{"alg":"RS256","e":"AQAB","key_ops":["verify"],"kty":"RSA","n":"0etQ2Tg187jb04MWfpuogYGV75IFrQQBxQaGH75eq_FpbkyoLcEpRUEWSbECP2eeFya2yZ9vIO5ScD-lPmovePk4Aa4SzZ8jdjhmAbNykleRPCxMg0481kz6PQhnHRUv3nF5WP479CnObJKqTVdEagVL66oxnX9VhZG9IZA7k0Th5PfKQwrKGyUeTGczpOjaPqbxlunP73j9AfnAt4XCS8epa-n3WGz1j-wfpr_ys57Aq-zBCfqP67UYzNpeI1AoXsJhD9xSDOzvJgFRvc3vm2wjAW4LEMwi48rCplamOpZToIHEPIaPzpveYQwDnB1HFTR1ove9bpKJsHmi-e2uzQ","use":"sig"}]}|]
   in baseCfg {
-    configJwtSecret = secret
-  , configJWKS = parseSecret <$> secret
+    configJwtSecret = Just secret
+  , configJWKS = rightToMaybe $ parseSecret secret
   }
-
-testNonexistentSchemaCfg :: AppConfig
-testNonexistentSchemaCfg = baseCfg { configDbSchemas = fromList ["nonexistent"] }
 
 testCfgExtraSearchPath :: AppConfig
 testCfgExtraSearchPath = baseCfg { configDbExtraSearchPath = ["public", "extensions", "EXTRA \"@/\\#~_-"] }
@@ -286,38 +299,6 @@ isErrorFormat s =
   obj = JSON.decode s :: Maybe (M.Map Text JSON.Value)
   keys = maybe S.empty M.keysSet obj
   validKeys = S.fromList ["message", "details", "hint", "code"]
-
--- | Follows these steps to verify if the table data changed in the db:
---  * Verifies the table data in the db before the change
---  * Does the mutation
---  * Verifies that the table data changed in the db
---  * Resets the table with the original data
-shouldMutateInto :: MutationCheck -> ResponseMatcher -> WaiExpectation ()
-shouldMutateInto (MutationCheck (BaseTable tblName tblOrd dataBefore) mutation) dataAfter = do
-  get ("/" <> tblName) `shouldRespondWith` [json|#{dataBefore}|]
-  mutation
-  get ("/" <> tblName <> "?order=" <> tblOrd) `shouldRespondWith` dataAfter
-  request methodPost "/rpc/reset_table"
-    [("Prefer", "tx=commit")]
-    [json| {"tbl_name": #{decodeUtf8 tblName}, "tbl_data": #{dataBefore}} |]
-  `shouldRespondWith` 204
-
--- | How the base table data will change using the requested mutation
-mutatesWith :: BaseTable -> WaiExpectation () -> MutationCheck
-mutatesWith = MutationCheck
-
--- | The original table data before it is modified.
--- The column order is needed for an accurate comparison after the mutation
-baseTable :: ByteString -> ByteString -> JSON.Value -> BaseTable
-baseTable = BaseTable
-
--- | The mutation (update/delete) that will be applied to the base table
-requestMutation :: Method -> ByteString -> [Header] -> BL.ByteString -> WaiExpectation ()
-requestMutation method path headers body =
-  request method path (("Prefer", "tx=commit") : headers) body `shouldRespondWith` 204
-
-data BaseTable = BaseTable ByteString ByteString JSON.Value
-data MutationCheck = MutationCheck BaseTable (WaiExpectation ())
 
 planCost :: SResponse -> Float
 planCost resp =

@@ -13,7 +13,6 @@ module PostgREST.Query.SqlFragment
   , fromQi
   , limitOffsetF
   , locationF
-  , mutRangeF
   , orderF
   , pgFmtColumn
   , pgFmtFilter
@@ -53,12 +52,13 @@ import qualified Hasql.Encoders                  as HE
 
 import Control.Arrow ((***))
 
-import Data.Foldable                 (foldr1)
-import Text.InterpolatedString.Perl6 (qc)
+import Data.Foldable     (foldr1)
+import NeatInterpolation (trimming)
 
 import PostgREST.ApiRequest.Types        (AggregateFunction (..),
                                           Alias, Cast,
                                           FtsOperator (..),
+                                          IsVal (..),
                                           JsonOperand (..),
                                           JsonOperation (..),
                                           JsonPath,
@@ -69,8 +69,7 @@ import PostgREST.ApiRequest.Types        (AggregateFunction (..),
                                           OrderDirection (..),
                                           OrderNulls (..),
                                           QuantOperator (..),
-                                          SimpleOperator (..),
-                                          TrileanVal (..))
+                                          SimpleOperator (..))
 import PostgREST.MediaType               (MTVndPlanFormat (..),
                                           MTVndPlanOption (..))
 import PostgREST.Plan.ReadPlan           (JoinCondition (..))
@@ -81,6 +80,7 @@ import PostgREST.Plan.Types              (CoercibleField (..),
                                           CoercibleSelectField (..),
                                           RelSelectField (..),
                                           SpreadSelectField (..),
+                                          ToTsVector (..),
                                           unknownField)
 import PostgREST.RangeQuery              (NonnegRange, allRange,
                                           rangeLimit, rangeOffset)
@@ -157,10 +157,10 @@ pgBuildArrayLiteral vals =
 
 -- TODO: refactor by following https://github.com/PostgREST/postgrest/pull/1631#issuecomment-711070833
 pgFmtIdent :: Text -> SQL.Snippet
-pgFmtIdent x = SQL.sql $ escapeIdent x
+pgFmtIdent x = SQL.sql . encodeUtf8 $ escapeIdent x
 
-escapeIdent :: Text -> ByteString
-escapeIdent x = encodeUtf8 $ "\"" <> T.replace "\"" "\"\"" (trimNullChars x) <> "\""
+escapeIdent :: Text -> Text
+escapeIdent x = "\"" <> T.replace "\"" "\"\"" (trimNullChars x) <> "\""
 
 -- Only use it if the input comes from the database itself, like on `jsonb_build_object('column_from_a_table', val)..`
 pgFmtLit :: Text -> Text
@@ -181,7 +181,7 @@ trimNullChars = T.takeWhile (/= '\x0')
 -- >>> escapeIdentList ["schema_1", "schema_2", "SPECIAL \"@/\\#~_-"]
 -- "\"schema_1\", \"schema_2\", \"SPECIAL \"\"@/\\#~_-\""
 escapeIdentList :: [Text] -> ByteString
-escapeIdentList schemas = BS.intercalate ", " $ escapeIdent <$> schemas
+escapeIdentList schemas = BS.intercalate ", " $ encodeUtf8 . escapeIdent <$> schemas
 
 asCsvF :: SQL.Snippet
 asCsvF = asCsvHeaderF <> " || '\n' || " <> asCsvBodyF
@@ -229,11 +229,11 @@ customFuncF _ funcQi RelAnyElement            = fromQi funcQi <> "(_postgrest_t)
 customFuncF _ funcQi (RelId target)           = fromQi funcQi <> "(_postgrest_t::" <> fromQi target <> ")"
 
 locationF :: [Text] -> SQL.Snippet
-locationF pKeys = [qc|(
-  WITH data AS (SELECT row_to_json(_) AS row FROM {sourceCTEName} AS _ LIMIT 1)
+locationF pKeys = SQL.sql $ encodeUtf8 [trimming|(
+  WITH data AS (SELECT row_to_json(_) AS row FROM ${sourceCTEName} AS _ LIMIT 1)
   SELECT array_agg(json_data.key || '=' || coalesce('eq.' || json_data.value, 'is.null'))
   FROM data CROSS JOIN json_each_text(data.row) AS json_data
-  WHERE json_data.key IN ('{fmtPKeys}')
+  WHERE json_data.key IN ('${fmtPKeys}')
 )|]
   where
     fmtPKeys = T.intercalate "','" pKeys
@@ -252,9 +252,15 @@ pgFmtCallUnary :: Text -> SQL.Snippet -> SQL.Snippet
 pgFmtCallUnary f x = SQL.sql (encodeUtf8 f) <> "(" <> x <> ")"
 
 pgFmtField :: QualifiedIdentifier -> CoercibleField -> SQL.Snippet
-pgFmtField table CoercibleField{cfName=fn, cfJsonPath=[]}                                = pgFmtColumn table fn
-pgFmtField table CoercibleField{cfName=fn, cfToJson=doToJson, cfJsonPath=jp} | doToJson  = "to_jsonb(" <> pgFmtColumn table fn <> ")" <> pgFmtJsonPath jp
-                                                                             | otherwise = pgFmtColumn table fn <> pgFmtJsonPath jp
+pgFmtField table cf = case cfToTsVector cf of
+  Just (ToTsVector lang) -> "to_tsvector(" <> pgFmtFtsLang lang <> fmtFld <> ")"
+  _                      -> fmtFld
+  where
+    fmtFld = case cf of
+      CoercibleField{cfFullRow=True}                                          -> fromQi table
+      CoercibleField{cfName=fn, cfJsonPath=[]}                                -> pgFmtColumn table fn
+      CoercibleField{cfName=fn, cfToJson=doToJson, cfJsonPath=jp} | doToJson  -> "to_jsonb(" <> pgFmtColumn table fn <> ")" <> pgFmtJsonPath jp
+                                                                  | otherwise -> pgFmtColumn table fn <> pgFmtJsonPath jp
 
 -- Select the value of a named element from a table, applying its optional coercion mapping if any.
 pgFmtTableCoerce :: QualifiedIdentifier -> CoercibleField -> SQL.Snippet
@@ -300,19 +306,17 @@ fromJsonBodyF :: Maybe LBS.ByteString -> [CoercibleField] -> Bool -> Bool -> Boo
 fromJsonBodyF body fields includeSelect includeLimitOne includeDefaults =
   (if includeSelect then "SELECT " <> namedCols <> " " else mempty) <>
   "FROM (SELECT " <> jsonPlaceHolder <> " AS json_data) pgrst_payload, " <>
-  -- convert a json object into a json array, this way we can use json_to_recordset for all json payloads
-  -- Otherwise we'd have to use json_to_record for json objects and json_to_recordset for json arrays
-  -- We do this in SQL to avoid processing the JSON in application code
-  "LATERAL (SELECT CASE WHEN " <> jsonTypeofF <> "(pgrst_payload.json_data) = 'array' THEN pgrst_payload.json_data ELSE " <> jsonBuildArrayF <> "(pgrst_payload.json_data) END AS val) pgrst_uniform_json, " <>
   (if includeDefaults
-    then "LATERAL (SELECT jsonb_agg(jsonb_build_object(" <> defsJsonb <> ") || elem) AS val from jsonb_array_elements(pgrst_uniform_json.val) elem) pgrst_json_defs, "
+    then if isJsonObject
+      then "LATERAL (SELECT " <> defsJsonb <> " || pgrst_payload.json_data AS val) pgrst_json_defs, "
+      else "LATERAL (SELECT jsonb_agg(" <> defsJsonb <> " || elem) AS val from jsonb_array_elements(pgrst_payload.json_data) elem) pgrst_json_defs, "
     else mempty) <>
   "LATERAL (SELECT " <> parsedCols <> " FROM " <>
-    (if null fields
-      -- When we are inserting no columns (e.g. using default values), we can't use our ordinary `json_to_recordset`
-      -- because it can't extract records with no columns (there's no valid syntax for the `AS (colName colType,...)`
-      -- part). But we still need to ensure as many rows are created as there are array elements.
-      then SQL.sql $ jsonArrayElementsF <> "(" <> finalBodyF <> ") _ "
+    (if null fields -- when json keys are empty, e.g. when payload is `{}` or `[{}, {}]`
+      then SQL.sql $
+        if isJsonObject
+          then "(values(1)) _ "                                  -- only 1 row for an empty json object '{}'
+          else jsonArrayElementsF <> "(" <> finalBodyF <> ") _ " -- extract rows of a json array of empty objects `[{}, {}]`
       else jsonToRecordsetF <> "(" <> SQL.sql finalBodyF <> ") AS _(" <> typedCols <> ") " <> if includeLimitOne then "LIMIT 1" else mempty
     ) <>
   ") pgrst_body "
@@ -320,16 +324,21 @@ fromJsonBodyF body fields includeSelect includeLimitOne includeDefaults =
     namedCols = intercalateSnippet ", " $ fromQi  . QualifiedIdentifier "pgrst_body" . cfName <$> fields
     parsedCols = intercalateSnippet ", " $ pgFmtCoerceNamed <$> fields
     typedCols = intercalateSnippet ", " $ pgFmtIdent . cfName <> const " " <> SQL.sql . encodeUtf8 . cfIRType <$> fields
-    defsJsonb = SQL.sql $ BS.intercalate "," fieldsWDefaults
+    defsJsonb = SQL.sql $ "jsonb_build_object(" <> BS.intercalate "," fieldsWDefaults <> ")"
     fieldsWDefaults = mapMaybe (\case
         CoercibleField{cfName=nam, cfDefault=Just def} -> Just $ encodeUtf8 (pgFmtLit nam <> ", " <> def)
         CoercibleField{cfDefault=Nothing} -> Nothing
       ) fields
-    (finalBodyF, jsonTypeofF, jsonBuildArrayF, jsonArrayElementsF, jsonToRecordsetF) =
+    (finalBodyF, jsonArrayElementsF, jsonToRecordsetF) =
       if includeDefaults
-        then ("pgrst_json_defs.val", "jsonb_typeof", "jsonb_build_array", "jsonb_array_elements", "jsonb_to_recordset")
-        else ("pgrst_uniform_json.val", "json_typeof", "json_build_array", "json_array_elements", "json_to_recordset")
+        then ("pgrst_json_defs.val", "jsonb_array_elements", if isJsonObject then "jsonb_to_record" else "jsonb_to_recordset")
+        else ("pgrst_payload.json_data", "json_array_elements", if isJsonObject then "json_to_record" else "json_to_recordset")
     jsonPlaceHolder = SQL.encoderAndParam (HE.nullable $ if includeDefaults then HE.jsonbLazyBytes else HE.jsonLazyBytes) body
+    isJsonObject = -- light validation as pg's json_to_record(set) already validates that the body is valid JSON. We just need to know whether the body looks like an object or not.
+      let
+        insignificantWhitespace = [32,9,10,13] --" \t\n\r" [32,9,10,13] https://datatracker.ietf.org/doc/html/rfc8259#section-2
+      in
+      LBS.take 1 (LBS.dropWhile (`elem` insignificantWhitespace) (fromMaybe mempty body)) == "{"
 
 pgFmtOrderTerm :: QualifiedIdentifier -> CoercibleOrderTerm -> SQL.Snippet
 pgFmtOrderTerm qi ot =
@@ -376,13 +385,15 @@ pgFmtFilter table (CoercibleFilter fld (OpExpr hasNot oper)) = notOp <> " " <> p
 
    -- IS cannot be prepared. `PREPARE boolplan AS SELECT * FROM projects where id IS $1` will give a syntax error.
    -- The above can be fixed by using `PREPARE boolplan AS SELECT * FROM projects where id IS NOT DISTINCT FROM $1;`
-   -- However that would not accept the TRUE/FALSE/NULL/UNKNOWN keywords. See: https://stackoverflow.com/questions/6133525/proper-way-to-set-preparedstatement-parameter-to-null-under-postgres.
+   -- However that would not accept the TRUE/FALSE/NULL/"NOT NULL"/UNKNOWN keywords. See: https://stackoverflow.com/questions/6133525/proper-way-to-set-preparedstatement-parameter-to-null-under-postgres.
    -- This is why `IS` operands are whitelisted at the Parsers.hs level
-   Is triVal -> " IS " <> case triVal of
-     TriTrue    -> "TRUE"
-     TriFalse   -> "FALSE"
-     TriNull    -> "NULL"
-     TriUnknown -> "UNKNOWN"
+   Is isVal -> " IS " <>
+      case isVal of
+        IsNull       -> "NULL"
+        IsNotNull    -> "NOT NULL"
+        IsTriTrue    -> "TRUE"
+        IsTriFalse   -> "FALSE"
+        IsTriUnknown -> "UNKNOWN"
 
    IsDistinctFrom val -> " IS DISTINCT FROM " <> unknownLiteral val
 
@@ -393,15 +404,17 @@ pgFmtFilter table (CoercibleFilter fld (OpExpr hasNot oper)) = notOp <> " " <> p
       [""] -> "= ANY('{}') "
       _    -> "= ANY (" <> pgFmtArrayLiteralForField vals fld <> ") "
 
-   Fts op lang val -> " " <> ftsOperator op <> "(" <> ftsLang lang <> unknownLiteral val <> ") "
+   Fts op lang val -> " " <> ftsOperator op <> "(" <> pgFmtFtsLang lang <> unknownLiteral val <> ") "
  where
-   ftsLang = maybe mempty (\l -> unknownLiteral l <> ", ")
    notOp = if hasNot then "NOT" else mempty
    star c = if c == '*' then '%' else c
    fmtQuant q val = case q of
     Just QuantAny -> "ANY(" <> val <> ")"
     Just QuantAll -> "ALL(" <> val <> ")"
     Nothing       -> val
+
+pgFmtFtsLang :: Maybe Text -> SQL.Snippet
+pgFmtFtsLang = maybe mempty (\l -> unknownLiteral l <> ", ")
 
 pgFmtJoinCondition :: JoinCondition -> SQL.Snippet
 pgFmtJoinCondition (JoinCondition (qi1, col1) (qi2, col2)) =
@@ -498,13 +511,6 @@ currentSettingF :: SQL.Snippet -> SQL.Snippet
 currentSettingF setting =
   -- nullif is used because of https://gist.github.com/steve-chavez/8d7033ea5655096903f3b52f8ed09a15
   "nullif(current_setting('" <> setting <> "', true), '')"
-
-mutRangeF :: QualifiedIdentifier -> [FieldName] -> (SQL.Snippet, SQL.Snippet)
-mutRangeF mainQi rangeId =
-  (
-    intercalateSnippet " AND " $ (\col -> pgFmtColumn mainQi col <> " = " <> pgFmtColumn (QualifiedIdentifier mempty "pgrst_affected_rows") col) <$> rangeId
-  , intercalateSnippet ", " (pgFmtColumn mainQi <$> rangeId)
-  )
 
 orderF :: QualifiedIdentifier -> [CoercibleOrderTerm] -> SQL.Snippet
 orderF _ []    = mempty

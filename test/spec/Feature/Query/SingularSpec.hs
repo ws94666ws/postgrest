@@ -70,9 +70,9 @@ spec =
             [("Prefer", "tx=commit"), singular]
             [json| { address: "zzz" } |]
           `shouldRespondWith`
-            [json|{"details":"The result contains 4 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 4 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
             { matchStatus  = 406
-            , matchHeaders = [ matchContentTypeSingular ]
+            , matchHeaders = [ matchContentTypeJson ]
             }
 
         -- the rows should not be updated, either
@@ -85,9 +85,9 @@ spec =
             [("Prefer", "tx=commit"), ("Prefer", "return=representation"), singular]
             [json| { address: "zzz" } |]
           `shouldRespondWith`
-            [json|{"details":"The result contains 4 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 4 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
             { matchStatus  = 406
-            , matchHeaders = [ matchContentTypeSingular ]
+            , matchHeaders = [ matchContentTypeJson ]
             }
 
         -- the rows should not be updated, either
@@ -99,18 +99,18 @@ spec =
         request methodPatch "/items?id=gt.0&id=lt.0"
                 [singular] [json|{"id":1}|]
           `shouldRespondWith`
-            [json|{"details":"The result contains 0 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 0 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
                   { matchStatus  = 406
-                  , matchHeaders = [matchContentTypeSingular]
+                  , matchHeaders = [matchContentTypeJson]
                   }
 
       it "raises an error for zero rows with return=rep" $
         request methodPatch "/items?id=gt.0&id=lt.0"
                 [("Prefer", "return=representation"), singular] [json|{"id":1}|]
           `shouldRespondWith`
-            [json|{"details":"The result contains 0 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 0 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
                   { matchStatus  = 406
-                  , matchHeaders = [matchContentTypeSingular]
+                  , matchHeaders = [matchContentTypeJson]
                   }
 
     context "when creating rows" $ do
@@ -141,9 +141,9 @@ spec =
             [("Prefer", "tx=commit"), singular]
             [json| [ { id: 200, address: "xxx" }, { id: 201, address: "yyy" } ] |]
           `shouldRespondWith`
-            [json|{"details":"The result contains 2 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 2 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
             { matchStatus  = 406
-            , matchHeaders = [ matchContentTypeSingular ]
+            , matchHeaders = [ matchContentTypeJson ]
             }
 
         -- the rows should not exist, either
@@ -156,9 +156,9 @@ spec =
             [("Prefer", "tx=commit"), ("Prefer", "return=representation"), singular]
             [json| [ { id: 202, address: "xxx" }, { id: 203, address: "yyy" } ] |]
           `shouldRespondWith`
-            [json|{"details":"The result contains 2 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 2 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
             { matchStatus  = 406
-            , matchHeaders = [ matchContentTypeSingular ]
+            , matchHeaders = [ matchContentTypeJson ]
             }
 
         -- the rows should not exist, either
@@ -171,9 +171,9 @@ spec =
             [("Prefer", "tx=commit"), ("Prefer", "return=minimal"), singular]
             [json| [ { id: 204, address: "xxx" }, { id: 205, address: "yyy" } ] |]
           `shouldRespondWith`
-            [json|{"details":"The result contains 2 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 2 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
             { matchStatus  = 406
-            , matchHeaders = [ matchContentTypeSingular ]
+            , matchHeaders = [ matchContentTypeJson ]
             }
 
         -- the rows should not exist, either
@@ -186,9 +186,9 @@ spec =
                 [singular]
                 [json| [ ] |]
           `shouldRespondWith`
-            [json|{"details":"The result contains 0 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 0 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
                   { matchStatus  = 406
-                  , matchHeaders = [matchContentTypeSingular]
+                  , matchHeaders = [matchContentTypeJson]
                   }
 
       it "raises an error when creating zero entities with return=rep" $
@@ -196,9 +196,9 @@ spec =
                 [("Prefer", "return=representation"), singular]
                 [json| [ ] |]
           `shouldRespondWith`
-            [json|{"details":"The result contains 0 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 0 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
                   { matchStatus  = 406
-                  , matchHeaders = [matchContentTypeSingular]
+                  , matchHeaders = [matchContentTypeJson]
                   }
 
     context "when deleting rows" $ do
@@ -219,9 +219,9 @@ spec =
             [("Prefer", "tx=commit"), singular]
             ""
           `shouldRespondWith`
-            [json|{"details":"The result contains 5 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 5 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
             { matchStatus  = 406
-            , matchHeaders = [ matchContentTypeSingular ]
+            , matchHeaders = [ matchContentTypeJson ]
             }
 
         -- the rows should still exist
@@ -236,9 +236,9 @@ spec =
         request methodDelete "/items?id=gt.5&id=lt.11"
             [("Prefer", "tx=commit"), ("Prefer", "return=representation"), singular] ""
           `shouldRespondWith`
-            [json|{"details":"The result contains 5 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 5 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
             { matchStatus  = 406
-            , matchHeaders = [ matchContentTypeSingular ]
+            , matchHeaders = [ matchContentTypeJson ]
             }
 
         -- the rows should still exist
@@ -252,18 +252,18 @@ spec =
         request methodDelete "/items?id=lt.0"
                 [singular] ""
           `shouldRespondWith`
-            [json|{"details":"The result contains 0 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 0 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
                 { matchStatus  = 406
-                , matchHeaders = [matchContentTypeSingular]
+                , matchHeaders = [matchContentTypeJson]
                 }
 
       it "raises an error when deleting zero entities with return=rep" $
         request methodDelete "/items?id=lt.0"
                 [("Prefer", "return=representation"), singular] ""
           `shouldRespondWith`
-            [json|{"details":"The result contains 0 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 0 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
                 { matchStatus  = 406
-                , matchHeaders = [matchContentTypeSingular]
+                , matchHeaders = [matchContentTypeJson]
                 }
 
     context "when calling a stored proc" $ do
@@ -271,9 +271,9 @@ spec =
         request methodPost "/rpc/getproject"
                 [singular] [json|{ "id": 9999999}|]
           `shouldRespondWith`
-            [json|{"details":"The result contains 0 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 0 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
                 { matchStatus  = 406
-                , matchHeaders = [matchContentTypeSingular]
+                , matchHeaders = [matchContentTypeJson]
                 }
 
       -- this one may be controversial, should vnd.pgrst.object include
@@ -294,9 +294,9 @@ spec =
         request methodPost "/rpc/getallprojects"
                 [singular] "{}"
           `shouldRespondWith`
-            [json|{"details":"The result contains 5 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 5 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
                 { matchStatus  = 406
-                , matchHeaders = [matchContentTypeSingular]
+                , matchHeaders = [matchContentTypeJson]
                 }
 
       it "fails for multiple rows with rolled back changes" $ do
@@ -309,9 +309,9 @@ spec =
             [("Prefer", "tx=commit"), singular]
             [json| {"id_l": 1, "id_h": 2, "name": "changed"} |]
           `shouldRespondWith`
-            [json|{"details":"The result contains 2 rows","message":"JSON object requested, multiple (or no) rows returned","code":"PGRST116","hint":null}|]
+            [json|{"details":"The result contains 2 rows","message":"Cannot coerce the result to a single JSON object","code":"PGRST116","hint":null}|]
             { matchStatus  = 406
-            , matchHeaders = [ matchContentTypeSingular]
+            , matchHeaders = [ matchContentTypeJson ]
             }
 
         -- should rollback function

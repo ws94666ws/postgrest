@@ -3,7 +3,7 @@ This is a 2018 version of the apflora schema https://github.com/barbalex/apf2/tr
 
 We use it to test our metadata generation because it contains a good amount of db objects.
 
-Custom roles and privileges where removed.
+Custom roles and privileges were removed.
 
 postgrest-with-postgresql-14 -f test/io/big_schema.sql psql
 
@@ -89,7 +89,6 @@ SET standard_conforming_strings = on;
 SET check_function_bodies = false;
 SET client_min_messages = warning;
 SET row_security = off;
-
 
 CREATE SCHEMA apflora;
 
@@ -11375,3 +11374,17 @@ ALTER TABLE ONLY apflora.zielber
     ADD CONSTRAINT zielber_ziel_id_fkey FOREIGN KEY (ziel_id) REFERENCES apflora.ziel(id) ON UPDATE CASCADE ON DELETE CASCADE;
 
 ALTER TABLE apflora."user" ENABLE ROW LEVEL SECURITY;
+
+DROP ROLE IF EXISTS postgrest_test_anonymous;
+CREATE ROLE postgrest_test_anonymous;
+
+GRANT postgrest_test_anonymous TO :PGUSER;
+
+GRANT USAGE ON SCHEMA apflora TO postgrest_test_anonymous;
+
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA apflora
+TO postgrest_test_anonymous;
+
+create or replace function apflora.notify_pgrst() returns void as $$
+  notify pgrst;
+$$ language sql;

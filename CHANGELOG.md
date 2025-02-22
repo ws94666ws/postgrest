@@ -7,22 +7,164 @@ This project adheres to [Semantic Versioning](http://semver.org/).
 
 ### Added
 
+ - #3558, Add the `admin-server-host` config to set the host for the admin server - @develop7
+ - #3607, Log to stderr when the JWT secret is less than 32 characters long - @laurenceisla
+ - #2858, Performance improvements when calling RPCs via GET using indexes in more cases - @wolfgangwalther
+ - #3560, Log resolved host in "Listening on ..." messages - @develop7
+ - #3727, Log maximum pool size - @steve-chavez
+ - #1536, Add string comparison feature for jwt-role-claim-key - @taimoorzaeem
+ - #3747, Allow `not_null` value for the `is` operator - @taimoorzaeem
+ - #2255, Apply `to_tsvector()` explicitly to the full-text search filtered column (excluding `tsvector` types) - @laurenceisla
+ - #1578, Log the main SQL query to stderr at the current `log-level` when `log-query=main-query` - @laurenceisla
+
+### Fixed
+
+ - #3693, Prevent spread embedding to allow aggregates when they are disabled - @laurenceisla
+ - #3693, A nested spread embedding now correctly groups by the fields of its top parent relationship - @laurenceisla
+ - #3693, Fix spread embedding errors when using the `count()` aggregate without a field - @laurenceisla
+   + Fixed `"column reference <col> is ambiguous"` error when selecting `?select=...table(col,count())`
+   + Fixed `"column <json_aggregate>.<alias> does not exist"` error when selecting `?select=...table(aias:count())`
+ - #3727, Clarify "listening" logs - @steve-chavez
+ - #3795, Clarify `Accept: vnd.pgrst.object` error message - @steve-chavez
+ - #3697, #3602, Handle queries on non-existing table gracefully - @taimoorzaeem
+
+### Changed
+
+ - #2052, Dropped support for PostgreSQL 9.6 - @wolfgangwalther
+ - #2052, Dropped support for PostgreSQL 10 - @wolfgangwalther
+ - #2052, Dropped support for PostgreSQL 11 - @wolfgangwalther
+ - #3508, PostgREST now fails to start when `server-port` and `admin-server-port` config options are the same - @develop7
+ - #3607, PostgREST now fails to start when the JWT secret is less than 32 characters long - @laurenceisla
+ - #3644, Fail schema cache lookup with invalid db-schemas config - @wolfgangwalther
+   - Previously, this would silently return 200 - OK on the root endpoint, but don't provide any usable endpoints.
+ - #3757, Remove support for `Prefer: params=single-object` - @joelonsql
+   + This preference was deprecated in favor of Functions with an array of JSON objects
+ - #3013, Drop support for Limited updates/deletes
+   + The feature was complicated and largely unused.
+ - #3697, #3602, Querying non-existent table now returns `PGRST205` error instead of empty json - @taimoorzaeem
+
+## [12.2.8] - 2025-02-10
+
+### Fixed
+
+ - #3841, Log `503` client error to stderr - @taimoorzaeem
+
+## [12.2.7] - 2025-02-03
+
+### Fixed
+
+ - #2524, Fix schema reloading notice on windows - @diogob
+
+## [12.2.6] - 2025-01-29
+
+### Fixed
+
+ - #3788, Fix jwt cache does not remove expired entries - @taimoorzaeem
+
+## [12.2.5] - 2025-01-20
+
+### Fixed
+
+ - #3867, Fix startup for arm64 docker image - @wolfgangwalther
+
+## [12.2.4] - 2025-01-18
+
+### Fixed
+
+ - #3779, Always log the schema cache load time - @steve-chavez
+ - #3706, Fix insert with `missing=default` uses default value of domain instead of column - @taimoorzaeem
+
+## [12.2.3] - 2024-08-01
+
+### Fixed
+
+ - #3091, Broken link in OpenAPI description `externalDocs` - @salim-b
+ - #3659, Embed One-to-One relationship with different column order properly - @wolfgangwalther
+ - #3504, Remove `format` from `rowFilter` parameters in OpenAPI - @dantheman2865
+ - #3660, Fix regression that loaded the schema cache before the in-database configuration - @steve-chavez, @laurenceisla
+
+## [12.2.2] - 2024-07-10
+
+### Fixed
+
+ - #3093, Nested empty embeds no longer show empty values and are correctly omitted - @laurenceisla
+ - #3644, Make --dump-schema work with in-database pgrst.db_schemas setting - @wolfgangwalther
+ - #3644, Show number of timezones in schema cache load report - @wolfgangwalther
+ - #3644, List correct enum options in OpenApi output when multiple types with same name are present - @wolfgangwalther
+ - #3523, Fix schema cache loading retry without backoff - @steve-chavez
+
+## [12.2.1] - 2024-06-27
+
+### Fixed
+
+ - #3147, Don't reload schema cache on every listener failure - @steve-chavez
+
+### Documentation
+
+ - #3592, Architecture diagram now supports dark mode and has links - @laurenceisla
+ - #3616, The schema isolation diagram now supports dark mode and uses well-known schemas - @laurenceisla
+
+## [12.2.0] - 2024-06-11
+
+### Added
+
  - #2887, Add Preference `max-affected` to limit affected resources - @taimoorzaeem
  - #3171, Add an ability to dump config via admin API - @skywriter
- - #3061, Apply all function settings as transaction-scoped settings - @taimoorzaeem
- - #3171, Log schema cache stats to stderr - @steve-chavez
+ - #3171, #3046, Log schema cache stats to stderr - @steve-chavez
+ - #3210, Dump schema cache through admin API - @taimoorzaeem
+ - #2676, Performance improvement on bulk json inserts, around 10% increase on requests per second by removing `json_typeof` from write queries - @steve-chavez
+ - #3435, Add log-level=debug, for development purposes - @steve-chavez
+ - #1526, Add `/metrics` endpoint on admin server - @steve-chavez
+   - Exposes connection pool metrics, schema cache metrics
+ - #3404, Show the failed MESSAGE or DETAIL in the `details` field of the `PGRST121` (could not parse RAISE 'PGRST') error - @laurenceisla
+ - #3404, Show extra information in the `PGRST121` (could not parse RAISE 'PGRST') error - @laurenceisla
+   + Shows the failed MESSAGE or DETAIL in the `details` field
+   + Shows the correct JSON format in the `hints` field
+ - #3340, Log when the LISTEN channel gets a notification - @steve-chavez
+ - #3184, Log full pg version to stderr on connection - @steve-chavez
+ - #3242. Add config `db-hoisted-tx-settings` to apply only hoisted function settings - @taimoorzaeem
+ - #3214, #3229 Log connection pool events on log-level=debug - @steve-chavez, @laurenceisla
+
+### Fixed
+
+ - #3237, Dump media handlers and timezones with --dump-schema - @wolfgangwalther
+ - #3323, #3324, Don't hide error on LISTEN channel failure - @steve-chavez
+ - #3330, Incorrect admin server `/ready` response on slow schema cache loads - @steve-chavez
+ - #3345, Fix in-database configuration values not loading for `pgrst.server_trace_header` and `pgrst.server_cors_allowed_origins` - @laurenceisla
+ - #3404, Clarify the `PGRST121` (could not parse RAISE 'PGRST') error message - @laurenceisla
+ - #3267, Fix wrong `503 Service Unavailable` on pg error `53400` - @taimoorzaeem
+ - #2985, Fix not adding `application_name` on all connection strings - @steve-chavez
+ - #3424, Admin `/live` and `/ready` now differentiates a failure as 500 status - @steve-chavez
+    + 503 status is still given when postgREST is in a recovering state
+ - #3478, Media Types are parsed case insensitively - @develop7
+ - #3533, #3536, Fix listener silently failing on read replica - @steve-chavez
+    + If the LISTEN connection fails, it's retried with exponential backoff
+ - #3414, Force listener to connect to read-write instances using `target_session_attrs` - @steve-chavez
+ - #3255, Fix incorrect `413 Request Entity Too Large` on pg errors `54*` - @taimoorzaeem
+ - #3549, Remove verbosity from error logs starting with "An error occurred..." and replacing it with "Failed to..." - @laurenceisla
+
+### Deprecated
+
+ - Support for PostgreSQL versions 9.6, 10 and 11 is deprecated. From this on version onwards, PostgREST will only support non-end-of-life PostgreSQL versions. See https://www.postgresql.org/support/versioning/.
+ - `Prefer: params=single-object` is deprecated. Use [a function with a single unnamed JSON parameter](https://postgrest.org/en/latest/references/api/functions.html#function-single-json) instead. - @steve-chavez
+
+### Documentation
+
+ - #3289, Add dark mode. Can be toggled by a button in the bottom right corner. - @laurenceisla
+ - #3384, Add architecture diagram and documentation - @steve-chavez
+
+## [12.0.3] - 2024-05-09
 
 ### Fixed
 
  - #3149, Misleading "Starting PostgREST.." logs on schema cache reloading - @steve-chavez
- - #2815, Build static executable with GSSAPI support - @wolfgangwalther
  - #3205, Fix wrong subquery error returning a status of 400 Bad Request - @steve-chavez
  - #3224, Return status code 406 for non-accepted media type instead of code 415 - @wolfgangwalther
  - #3160, Fix using select= query parameter for custom media type handlers - @wolfgangwalther
-
-### Deprecated
-
- - `Prefer: params=single-object` is deprecated. Use [a function with a single unnamed JSON parameter](https://postgrest.org/en/latest/references/api/stored_procedures.html#s-proc-single-json) instead. - @steve-chavez
+ - #3361, Clarify PGRST204(column not found) error message - @steve-chavez
+ - #3373, Remove rejected mediatype `application/vnd.pgrst.object+json` from response - @taimoorzaeem
+ - #3418, Fix OpenAPI not tagging a FK column correctly on O2O relationships - @laurenceisla
+ - #3256, Fix wrong http status for pg error `42P17 infinite recursion` - @taimoorzaeem
 
 ## [12.0.2] - 2023-12-20
 
@@ -78,6 +220,7 @@ This project adheres to [Semantic Versioning](http://semver.org/).
  - Removed `application/octet-stream`, `text/plain`, `text/xml` [builtin support for scalar results](https://postgrest.org/en/v11.1/references/api/resource_representation.html#scalar-function-response-format) - @steve-chavez
  - Removed default `application/openapi+json` media type for [db-root-spec](https://postgrest.org/en/v11.1/references/configuration.html#db-root-spec) - @steve-chavez
  - Removed [db-use-legacy-gucs](https://postgrest.org/en/v11.2/references/configuration.html#db-use-legacy-gucs) - @laurenceisla
+   + All PostgreSQL versions now use GUCs in JSON format for [Headers, Cookies and JWT claims](https://postgrest.org/en/v12/references/transactions.html#request-headers-cookies-and-jwt-claims).
 
 ## [11.2.2] - 2023-10-25
 
@@ -381,6 +524,11 @@ This project adheres to [Semantic Versioning](http://semver.org/).
  - #2312, Using `Prefer: return=representation` no longer returns a `Location` header - @laurenceisla
  - #1984, For the cases where one to one relationships are detected, json objects will be returned instead of json arrays of length 1
    + If you wish to override this behavior, you can use computed relationships to return arrays again
+   + You can get the newly detected one-to-one relationships by using the `--dump-schema` option and filtering with [jq](https://github.com/jqlang/jq).
+     ```
+     ./postgrest --dump-schema  \
+     | jq  '[.dbRelationships | .[] | .[1] | .[] | select(.relCardinality.tag == "O2O" and .relFTableIsView == false and .relTableIsView == false) | del(.relFTableIsView,.relTableIsView,.tag,.relIsSelf)]'
+     ```
 
 ## [9.0.1] - 2022-06-03
 

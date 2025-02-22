@@ -75,12 +75,12 @@ The PostgREST utilities available in `nix-shell` all have names that begin with
 postgrest-build                   postgrest-test-spec
 postgrest-check                   postgrest-watch
 postgrest-clean                   postgrest-with-all
-postgrest-coverage                postgrest-with-postgresql-10
-postgrest-lint                    postgrest-with-postgresql-11
-postgrest-run                     postgrest-with-postgresql-12
-postgrest-style                   postgrest-with-postgresql-13
-postgrest-style-check             postgrest-with-postgresql-9.6
-postgrest-test-io
+postgrest-coverage                postgrest-with-postgresql-12
+postgrest-lint                    postgrest-with-postgresql-13
+postgrest-run                     postgrest-with-postgresql-14
+postgrest-style                   postgrest-with-postgresql-15
+postgrest-style-check             postgrest-with-postgresql-16
+postgrest-test-io                 postgrest-with-postgresql-17
 ...
 
 [nix-shell]$
@@ -99,12 +99,12 @@ $ nix-shell --arg memory true
 postgrest-build                   postgrest-test-spec
 postgrest-check                   postgrest-watch
 postgrest-clean                   postgrest-with-all
-postgrest-coverage                postgrest-with-postgresql-10
-postgrest-lint                    postgrest-with-postgresql-11
-postgrest-run                     postgrest-with-postgresql-12
-postgrest-style                   postgrest-with-postgresql-13
-postgrest-style-check             postgrest-with-postgresql-9.6
-postgrest-test-io
+postgrest-coverage                postgrest-with-postgresql-12
+postgrest-lint                    postgrest-with-postgresql-13
+postgrest-run                     postgrest-with-postgresql-14
+postgrest-style                   postgrest-with-postgresql-15
+postgrest-style-check             postgrest-with-postgresql-16
+postgrest-test-io                 postgrest-with-postgresql-17
 postgrest-test-memory
 ...
 
@@ -248,6 +248,27 @@ $ nix-shell --run postgrest-style
 There is also `postgrest-style-check` that exits with a non-zero exit code if
 the check resulted in any uncommitted changes. It's mostly useful for CI.
 
+## Documentation
+
+The following commands can help you when working on the PostgREST docs:
+
+```bash
+# Build the docs
+[nix-shell]$ postgrest-docs-build
+
+# Build the docs and start a livereload server on `http://localhost:5500`
+[nix-shell]$ postgrest-docs-serve
+
+# Run aspell, to verify spelling mistakes
+[nix-shell]$ postgrest-docs-spellcheck
+
+# Detect obsolete entries in postgrest.dict
+[nix-shell]$ postgrest-docs-dictcheck
+
+# Build and run all the validation scripts
+[nix-shell]$ postgrest-docs-check
+```
+
 ## General development tools
 
 Tools like `postgrest-build`, `postgrest-run`, `postgrest-repl` etc. are simple wrappers around
@@ -280,6 +301,55 @@ ghci> import PostgREST.MediaType
 ghci> decodeMediaType "application/json"
 MTApplicationJSON
 ```
+
+## Working with locally modified Haskell packages
+
+Sometimes, we need to modify Haskell libraries in order to debug them or enhance them.
+For example, if you want to debug the [`hasql-pool`](https://hackage.haskell.org/package/hasql-pool)
+library:
+
+First, copy the package to the repo root. We'll use GitHub in this example.
+
+```bash
+$ git clone --depth=1 --branch=0.10.1 https://github.com/nikita-volkov/hasql-pool.git
+$ rm -rf ./hasql-pool/.git
+```
+
+Then, pin the local package to the [`haskell-packages.nix`](./overlays/haskell-packages.nix) file.
+
+```nix
+  overrides =
+    # ...
+    rec {
+
+      # Different subpath may be needed if the cabal file is not in the library's base directory
+      hasql-pool = lib.dontCheck
+        (prev.callCabal2nixWithOptions "hasql-pool" ../../hasql-pool "--subpath=." {} );
+
+    };
+```
+
+Next, both [`cabal.project`](/cabal.project) and [`stack.yaml`](/stack.yaml) need to be updated
+with the local library:
+
+```cabal
+-- cabal.project
+packages:
+  ./hasql-pool/hasql-pool.cabal
+```
+
+```yaml
+# stack.yaml
+extra-deps:
+  - ./hasql-pool/hasql-pool.cabal
+```
+
+Lastly, run `nix-shell` to build the local package. You don't need to exit and
+enter the Nix shell every time you modify the library's code, re-executing
+`postgrest-run` should be enough.
+
+This is done for development purposes only. Local libraries must not be left
+in production ready code.
 
 ## Tour
 

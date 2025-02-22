@@ -1,5 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns        #-}
+{-# LANGUAGE RecordWildCards       #-}
 {-|
 Module      : PostgREST.Query.QueryBuilder
 Description : PostgREST SQL queries generating functions.
@@ -16,15 +17,17 @@ module PostgREST.Query.QueryBuilder
   , limitedQuery
   ) where
 
+import qualified Data.Aeson                      as JSON
 import qualified Data.ByteString.Char8           as BS
+import qualified Data.HashMap.Strict             as HM
 import qualified Hasql.DynamicStatements.Snippet as SQL
+import qualified Hasql.Encoders                  as HE
 
 import Data.Maybe (fromJust)
 import Data.Tree  (Tree (..))
 
 import PostgREST.ApiRequest.Preferences   (PreferResolution (..))
-import PostgREST.Config.PgVersion         (PgVersion, pgVersion110,
-                                           pgVersion130)
+import PostgREST.Config.PgVersion         (PgVersion, pgVersion130)
 import PostgREST.SchemaCache.Identifiers  (QualifiedIdentifier (..))
 import PostgREST.SchemaCache.Relationship (Cardinality (..),
                                            Junction (..),
@@ -37,21 +40,20 @@ import PostgREST.Plan.MutatePlan
 import PostgREST.Plan.ReadPlan
 import PostgREST.Plan.Types
 import PostgREST.Query.SqlFragment
-import PostgREST.RangeQuery        (allRange)
 
 import Protolude
 
 readPlanToQuery :: ReadPlanTree -> SQL.Snippet
 readPlanToQuery node@(Node ReadPlan{select,from=mainQi,fromAlias,where_=logicForest,order, range_=readRange, relToParent, relJoinConds, relSelect} forest) =
   "SELECT " <>
-  intercalateSnippet ", " ((pgFmtSelectItem qi <$> (if null select && null forest then defSelect else select)) ++ joinsSelects) <> " " <>
-  fromFrag <> " " <>
-  intercalateSnippet " " joins <> " " <>
+  intercalateSnippet ", " ((pgFmtSelectItem qi <$> (if null select && null forest then defSelect else select)) ++ joinsSelects) <>
+  fromFrag <>
+  intercalateSnippet " " joins <>
   (if null logicForest && null relJoinConds
     then mempty
-    else "WHERE " <> intercalateSnippet " AND " (map (pgFmtLogicTree qi) logicForest ++ map pgFmtJoinCondition relJoinConds)) <> " " <>
-  groupF qi select relSelect <> " " <>
-  orderF qi order <> " " <>
+    else " WHERE " <> intercalateSnippet " AND " (map (pgFmtLogicTree qi) logicForest ++ map pgFmtJoinCondition relJoinConds)) <> " " <>
+  groupF qi select relSelect <>
+  orderF qi order <>
   limitOffsetF readRange
   where
     fromFrag = fromF relToParent mainQi fromAlias
@@ -92,7 +94,7 @@ getJoin :: RelSelectField -> ReadPlanTree -> SQL.Snippet
 getJoin fld node@(Node ReadPlan{relJoinType} _) =
   let
     correlatedSubquery sub al cond =
-      (if relJoinType == Just JTInner then "INNER" else "LEFT") <> " JOIN LATERAL ( " <> sub <> " ) AS " <> al <> " ON " <> cond
+      " " <> (if relJoinType == Just JTInner then "INNER" else "LEFT") <> " JOIN LATERAL ( " <> sub <> " ) AS " <> al <> " ON " <> cond
     subquery = readPlanToQuery node
     aggAlias = pgFmtIdent $ rsAggAlias fld
   in
@@ -108,7 +110,7 @@ getJoin fld node@(Node ReadPlan{relJoinType} _) =
         in correlatedSubquery subq aggAlias condition
 
 mutatePlanToQuery :: MutatePlan -> SQL.Snippet
-mutatePlanToQuery (Insert mainQi iCols body onConflct putConditions returnings _ applyDefaults) =
+mutatePlanToQuery (Insert mainQi iCols body onConflict putConditions returnings _ applyDefaults) =
   "INSERT INTO " <> fromQi mainQi <> (if null iCols then " " else "(" <> cols <> ") ") <>
   fromJsonBodyF body iCols True False applyDefaults <>
   -- Only used for PUT
@@ -125,90 +127,79 @@ mutatePlanToQuery (Insert mainQi iCols body onConflct putConditions returnings _
         if null iCols
            then "DO NOTHING"
            else "DO UPDATE SET " <> intercalateSnippet ", " ((pgFmtIdent . cfName) <> const " = EXCLUDED." <> (pgFmtIdent . cfName) <$> iCols) <> (if null putConditions && not mergeDups then mempty else "WHERE " <> addConfigPgrstInserted False)
-    ) onConflct <> " " <>
+    ) onConflict <> " " <>
     returningF mainQi returnings
   where
     cols = intercalateSnippet ", " $ pgFmtIdent . cfName <$> iCols
-    mergeDups = case onConflct of {Just (MergeDuplicates,_) -> True; _ -> False;}
+    mergeDups = case onConflict of {Just (MergeDuplicates,_) -> True; _ -> False;}
 
--- An update without a limit is always filtered with a WHERE
-mutatePlanToQuery (Update mainQi uCols body logicForest range ordts returnings applyDefaults)
+mutatePlanToQuery (Update mainQi uCols body logicForest returnings applyDefaults)
   | null uCols =
     -- if there are no columns we cannot do UPDATE table SET {empty}, it'd be invalid syntax
     -- selecting an empty resultset from mainQi gives us the column names to prevent errors when using &select=
     -- the select has to be based on "returnings" to make computed overloaded functions not throw
     "SELECT " <> emptyBodyReturnedColumns <> " FROM " <> fromQi mainQi <> " WHERE false"
 
-  | range == allRange =
-    "UPDATE " <> mainTbl <> " SET " <> nonRangeCols <> " " <>
+  | otherwise =
+    "UPDATE " <> mainTbl <> " SET " <> cols <> " " <>
     fromJsonBodyF body uCols False False applyDefaults <>
     whereLogic <> " " <>
-    returningF mainQi returnings
-
-  | otherwise =
-    "WITH " <>
-    "pgrst_update_body AS (" <> fromJsonBodyF body uCols True True applyDefaults <> "), " <>
-    "pgrst_affected_rows AS (" <>
-      "SELECT " <> rangeIdF <> " FROM " <> mainTbl <>
-      whereLogic <> " " <>
-      orderF mainQi ordts <> " " <>
-      limitOffsetF range <>
-    ") " <>
-    "UPDATE " <> mainTbl <> " SET " <> rangeCols <>
-    "FROM pgrst_affected_rows " <>
-    "WHERE " <> whereRangeIdF <> " " <>
     returningF mainQi returnings
 
   where
     whereLogic = if null logicForest then mempty else " WHERE " <> intercalateSnippet " AND " (pgFmtLogicTree mainQi <$> logicForest)
     mainTbl = fromQi mainQi
     emptyBodyReturnedColumns = if null returnings then "NULL" else intercalateSnippet ", " (pgFmtColumn (QualifiedIdentifier mempty $ qiName mainQi) <$> returnings)
-    nonRangeCols = intercalateSnippet ", " (pgFmtIdent . cfName <> const " = " <> pgFmtColumn (QualifiedIdentifier mempty "pgrst_body") . cfName <$> uCols)
-    rangeCols = intercalateSnippet ", " ((\col -> pgFmtIdent (cfName col) <> " = (SELECT " <> pgFmtIdent (cfName col) <> " FROM pgrst_update_body) ") <$> uCols)
-    (whereRangeIdF, rangeIdF) = mutRangeF mainQi (cfName . coField <$> ordts)
+    cols = intercalateSnippet ", " (pgFmtIdent . cfName <> const " = " <> pgFmtColumn (QualifiedIdentifier mempty "pgrst_body") . cfName <$> uCols)
 
-mutatePlanToQuery (Delete mainQi logicForest range ordts returnings)
-  | range == allRange =
-    "DELETE FROM " <> fromQi mainQi <> " " <>
-    whereLogic <> " " <>
-    returningF mainQi returnings
-
-  | otherwise =
-    "WITH " <>
-    "pgrst_affected_rows AS (" <>
-      "SELECT " <> rangeIdF <> " FROM " <> fromQi mainQi <>
-       whereLogic <> " " <>
-      orderF mainQi ordts <> " " <>
-      limitOffsetF range <>
-    ") " <>
-    "DELETE FROM " <> fromQi mainQi <> " " <>
-    "USING pgrst_affected_rows " <>
-    "WHERE " <> whereRangeIdF <> " " <>
-    returningF mainQi returnings
-
+mutatePlanToQuery (Delete mainQi logicForest returnings) =
+  "DELETE FROM " <> fromQi mainQi <> " " <>
+  whereLogic <> " " <>
+  returningF mainQi returnings
   where
     whereLogic = if null logicForest then mempty else " WHERE " <> intercalateSnippet " AND " (pgFmtLogicTree mainQi <$> logicForest)
-    (whereRangeIdF, rangeIdF) = mutRangeF mainQi (cfName . coField <$> ordts)
 
 callPlanToQuery :: CallPlan -> PgVersion -> SQL.Snippet
-callPlanToQuery (FunctionCall qi params args returnsScalar returnsSetOfScalar returnsCompositeAlias returnings) pgVer =
+callPlanToQuery (FunctionCall qi params arguments returnsScalar returnsSetOfScalar returnsCompositeAlias returnings) pgVer =
   "SELECT " <> (if returnsScalar || returnsSetOfScalar then "pgrst_call.pgrst_scalar" else returnedColumns) <> " " <>
   fromCall
   where
+    jsonArgs = case arguments of
+      DirectArgs args -> Just $ JSON.encode args
+      JsonArgs json   -> json
     fromCall = case params of
-      OnePosParam prm -> "FROM " <> callIt (singleParameter args $ encodeUtf8 $ ppType prm)
+      OnePosParam prm -> "FROM " <> callIt (singleParameter jsonArgs $ encodeUtf8 $ ppType prm)
       KeyParams []    -> "FROM " <> callIt mempty
-      KeyParams prms  -> fromJsonBodyF args ((\p -> CoercibleField (ppName p) mempty False (ppTypeMaxLength p) Nothing Nothing) <$> prms) False True False <> ", " <>
+      KeyParams prms  -> case arguments of
+        DirectArgs args -> "FROM " <> callIt (fmtArgs prms args)
+        JsonArgs json   -> fromJsonBodyF json ((\p -> CoercibleField (ppName p) mempty False Nothing (ppTypeMaxLength p) Nothing Nothing False) <$> prms) False True False <> ", " <>
                          "LATERAL " <> callIt (fmtParams prms)
 
     callIt :: SQL.Snippet -> SQL.Snippet
-    callIt argument | pgVer < pgVersion130 && pgVer >= pgVersion110 && returnsCompositeAlias = "(SELECT (" <> fromQi qi <> "(" <> argument <> ")).*) pgrst_call"
-                    | returnsScalar || returnsSetOfScalar                                    = "(SELECT " <> fromQi qi <> "(" <> argument <> ") pgrst_scalar) pgrst_call"
-                    | otherwise                                                              = fromQi qi <> "(" <> argument <> ") pgrst_call"
+    callIt argument | pgVer < pgVersion130 && returnsCompositeAlias = "(SELECT (" <> fromQi qi <> "(" <> argument <> ")).*) pgrst_call"
+                    | returnsScalar || returnsSetOfScalar           = "(SELECT " <> fromQi qi <> "(" <> argument <> ") pgrst_scalar) pgrst_call"
+                    | otherwise                                     = fromQi qi <> "(" <> argument <> ") pgrst_call"
 
     fmtParams :: [RoutineParam] -> SQL.Snippet
     fmtParams prms = intercalateSnippet ", "
       ((\a -> (if ppVar a then "VARIADIC " else mempty) <> pgFmtIdent (ppName a) <> " := pgrst_body." <> pgFmtIdent (ppName a)) <$> prms)
+
+    fmtArgs :: [RoutineParam] -> HM.HashMap Text RpcParamValue -> SQL.Snippet
+    fmtArgs prms args = intercalateSnippet ", " $ fmtArg <$> prms
+      where
+        fmtArg RoutineParam{..} =
+          (if ppVar then "VARIADIC " else mempty) <>
+          pgFmtIdent ppName <>
+          " := " <>
+          encodeArg (HM.lookup ppName args) <>
+          "::" <>
+          SQL.sql (encodeUtf8 ppTypeMaxLength)
+        encodeArg :: Maybe RpcParamValue -> SQL.Snippet
+        encodeArg (Just (Variadic v)) = SQL.encoderAndParam (HE.nonNullable $ HE.foldableArray $ HE.nonNullable HE.text) v
+        encodeArg (Just (Fixed v)) = SQL.encoderAndParam (HE.nonNullable HE.unknown) $ encodeUtf8 v
+        -- Currently not supported: Calling functions without some of their arguments without DEFAULT.
+        -- We could fallback to providing this NULL value in those cases.
+        encodeArg Nothing = "NULL"
 
     returnedColumns :: SQL.Snippet
     returnedColumns
@@ -267,7 +258,7 @@ getQualifiedIdentifier rel mainQi tblAlias = case rel of
 
 -- FROM clause plus implicit joins
 fromF :: Maybe Relationship -> QualifiedIdentifier -> Maybe Alias -> SQL.Snippet
-fromF rel mainQi tblAlias = "FROM " <>
+fromF rel mainQi tblAlias = " FROM " <>
   (case rel of
     -- Due to the use of CTEs on RPC, we need to cast the parameter to the table name in case of function overloading.
     -- See https://github.com/PostgREST/postgrest/issues/2963#issuecomment-1736557386

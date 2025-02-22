@@ -3,10 +3,17 @@
 Observability
 #############
 
+Observability allows measuring a system's current state based on the data it generates, such as logs, metrics, and traces.
+
+.. contents::
+   :depth: 1
+   :local:
+   :backlinks: none
+
 .. _pgrst_logging:
 
-Logging
--------
+Logs
+====
 
 PostgREST logs basic request information to ``stdout``, including the authenticated user if available, the requesting IP address and user agent, the URL requested, and HTTP response status.
 
@@ -15,34 +22,57 @@ PostgREST logs basic request information to ``stdout``, including the authentica
    127.0.0.1 - user [26/Jul/2021:01:56:38 -0500] "GET /clients HTTP/1.1" 200 - "" "curl/7.64.0"
    127.0.0.1 - anonymous [26/Jul/2021:01:56:48 -0500] "GET /unexistent HTTP/1.1" 404 - "" "curl/7.64.0"
 
-For diagnostic information about the server itself, PostgREST logs to ``stderr``.
+For diagnostic information about the server itself, PostgREST logs to ``stderr``:
+
+  - The full version of the connected PostgreSQL database.
+  - :ref:`schema_cache` statistics.
+  - The messages received by the :ref:`listener`.
 
 .. code::
 
-   12/Jun/2021:17:47:39 -0500: Starting PostgREST 11.1.0...
-   12/Jun/2021:17:47:39 -0500: Attempting to connect to the database...
-   12/Jun/2021:17:47:39 -0500: Listening on port 3000
-   12/Jun/2021:17:47:39 -0500: Connection successful
-   12/Jun/2021:17:47:39 -0500: Config re-loaded
-   12/Jun/2021:17:47:40 -0500: Schema cache loaded
+   06/May/2024:08:16:11 -0500: Starting PostgREST 12.1...
+   06/May/2024:08:16:11 -0500: Successfully connected to PostgreSQL 14.10 (Ubuntu 14.10-0ubuntu0.22.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0, 64-bit
+   06/May/2024:08:16:11 -0500: Connection Pool initialized with a maximum size of 10 connections
+   06/May/2024:08:16:11 -0500: API server listening on port 3000
+   06/May/2024:08:16:11 -0500: Listening for database notifications on the "pgrst" channel
+   06/May/2024:08:16:11 -0500: Config reloaded
+   06/May/2024:08:16:11 -0500: Schema cache queried in 3.8 milliseconds
+   06/May/2024:08:16:11 -0500: Schema cache loaded 15 Relations, 8 Relationships, 8 Functions, 0 Domain Representations, 4 Media Type Handlers
+   06/May/2024:14:11:27 -0500: Received a config reload message on the "pgrst" channel
+   06/May/2024:14:11:27 -0500: Config reloaded
 
-.. note::
+.. _sql_query_logs:
 
-   When running it in an SSH session you must detach it from stdout or it will be terminated when the session closes. The easiest technique is redirecting the output to a log file or to the syslog:
+SQL Query Logs
+--------------
 
-   .. code-block:: bash
+To log the :ref:`main SQL query <main_query>` executed for a request, set the :ref:`log-query` to ``main-query``.
+It will be logged based on the current :ref:`log-level` setting.
+For example, with this configuration:
 
-     ssh foo@example.com \
-       'postgrest foo.conf </dev/null >/var/log/postgrest.log 2>&1 &'
+.. code-block:: bash
 
-     # another option is to pipe the output into "logger -t postgrest"
+  log-level = "warn"
+  log-query = "main-query"
 
-Currently PostgREST doesn't log the SQL commands executed against the underlying database.
+The SQL queries will only be logged on ``400`` HTTP errors and up.
+So, if the user requests a resource without sufficient privileges:
+
+.. code-block:: bash
+
+  curl "localhost:3000/protected_table"
+
+This will be logged by PostgREST:
+
+.. code::
+
+  17/Feb/2025:17:28:15 -0500: WITH pgrst_source AS ( SELECT "public"."protected_table".* FROM "public"."protected_table"  )  SELECT null::bigint AS total_result_set, pg_catalog.count(_postgrest_t) AS page_total, coalesce(json_agg(_postgrest_t), '[]') AS body, nullif(current_setting('response.headers', true), '') AS response_headers, nullif(current_setting('response.status', true), '') AS response_status, '' AS response_inserted FROM ( SELECT * FROM pgrst_source ) _postgrest_t
+  127.0.0.1 - web_anon [17/Feb/2025:17:28:15 -0500] "GET /protected_table HTTP/1.1" 401 - "" "curl/8.7.1"
 
 Database Logs
-~~~~~~~~~~~~~
+-------------
 
-To find the SQL operations, you can watch the database logs. By default PostgreSQL does not keep these logs, so you'll need to make the configuration changes below.
+Additionally, to find all the SQL operations, you can watch the database logs. By default PostgreSQL does not keep these logs, so you'll need to make the configuration changes below.
 
 Find :code:`postgresql.conf` inside your PostgreSQL data directory (to find that, issue the command :code:`show data_directory;`). Either find the settings scattered throughout the file and change them to the following values, or append this block of code to the end of the configuration file.
 
@@ -81,38 +111,103 @@ Restart the database and watch the log file in real-time to understand how HTTP 
     docker run -v "$(pwd)/init.sh":"/docker-entrypoint-initdb.d/init.sh" -d postgres
     docker logs -f <container-id>
 
-Server Version
---------------
+.. _metrics:
 
-When debugging a problem it's important to verify the running PostgREST version. There are three ways to do this:
+Metrics
+=======
 
-- Look for the :code:`Server` HTTP response header that is returned on every request.
+The ``metrics`` endpoint on the :ref:`admin_server` endpoint provides metrics in `Prometheus text format <https://prometheus.io/docs/instrumenting/exposition_formats/#text-based-format>`_.
+
+.. code-block:: bash
+
+  curl "http://localhost:3001/metrics"
+
+  # HELP pgrst_schema_cache_query_time_seconds The query time in seconds of the last schema cache load
+  # TYPE pgrst_schema_cache_query_time_seconds gauge
+  pgrst_schema_cache_query_time_seconds 1.5937927e-2
+  # HELP pgrst_schema_cache_loads_total The total number of times the schema cache was loaded
+  # TYPE pgrst_schema_cache_loads_total counter
+  pgrst_schema_cache_loads_total 1.0
+  ...
+
+Schema Cache Metrics
+--------------------
+
+Metrics related to the :ref:`schema_cache`.
+
+pgrst_schema_cache_query_time_seconds
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+======== =======
+**Type** Gauge
+======== =======
+
+The query time in seconds of the last schema cache load.
+
+pgrst_schema_cache_loads_total
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+========== ==========================
+**Type**   Counter
+**Labels** ``status``: SUCCESS | FAIL
+========== ==========================
+
+The total number of times the schema cache was loaded.
+
+Connection Pool Metrics
+-----------------------
+
+Metrics related to the :ref:`connection_pool`.
+
+pgrst_db_pool_timeouts_total
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+======== =======
+**Type** Counter
+======== =======
+
+The total number of pool connection timeouts.
+
+pgrst_db_pool_available
+~~~~~~~~~~~~~~~~~~~~~~~
+
+======== =======
+**Type** Gauge
+======== =======
+
+Available connections in the pool.
+
+pgrst_db_pool_waiting
+~~~~~~~~~~~~~~~~~~~~~
+
+======== =======
+**Type** Gauge
+======== =======
+
+Requests waiting to acquire a pool connection
+
+pgrst_db_pool_max
+~~~~~~~~~~~~~~~~~
+
+======== =======
+**Type** Gauge
+======== =======
+
+Max pool connections.
+
+Traces
+======
+
+Server Version Header
+---------------------
+
+When debugging a problem it's important to verify the running PostgREST version. For this you can look at the :code:`Server` HTTP response header that is returned on every request.
 
 .. code::
 
   HEAD /users HTTP/1.1
 
   Server: postgrest/11.0.1
-
-- Query ``application_name`` on `pg_stat_activity <https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-ACTIVITY-VIEW>`_.
-
-.. code-block:: psql
-
-  select distinct application_name
-  from pg_stat_activity
-  where application_name ilike '%postgrest%';
-
-        application_name
-  ------------------------------
-  PostgREST 11.1.0
-
-.. important::
-
-  - The server sets the `fallback_application_name <https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNECT-FALLBACK-APPLICATION-NAME>`_ to the connection URI for this query to work. To override the value set ``application_name`` on the connection string.
-  - The version will only be set if it's a valid URI (`RFC 3986 <https://datatracker.ietf.org/doc/html/rfc3986>`_). This means any special characters must be urlencoded.
-  - The version will not be set if the connection string is in `keyword/value format <https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING-KEYWORD-VALUE>`_.
-
-- The ``stderr`` logs also contain the version, as noted on :ref:`pgrst_logging`.
 
 .. _trace_header:
 
@@ -177,7 +272,7 @@ This is enabled by :ref:`db-plan-enabled` (false by default).
   curl "http://localhost:3000/users?select=name&order=id" \
     -H "Accept: application/vnd.pgrst.plan"
 
-.. code-block:: psql
+.. code-block:: postgres
 
   Aggregate  (cost=73.65..73.68 rows=1 width=112)
     ->  Index Scan using users_pkey on users  (cost=0.15..60.90 rows=850 width=36)
@@ -237,7 +332,7 @@ However, if you choose to use it in production you can add a :ref:`db-pre-reques
 
 For example, to only allow requests from an IP address to get the execution plans:
 
-.. code-block:: postgresql
+.. code-block:: postgres
 
  -- Assuming a proxy(Nginx, Cloudflare, etc) passes an "X-Forwarded-For" header(https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Forwarded-For)
  create or replace function filter_plan_requests()
@@ -263,6 +358,7 @@ For example, to only allow requests from an IP address to get the execution plan
 
     const redirects = {
       '#health_check': 'health_check.html',
+      '#server-version': '#server-version-header',
     };
 
     let willRedirectTo = redirects[hash];

@@ -1,8 +1,8 @@
 personal_ws-1.1 en 0 utf-8
 api
 API's
+APIs
 APISIX
-Archlinux
 aud
 Auth
 auth
@@ -12,9 +12,9 @@ booleans
 BOM
 Bytea
 Cardano
-casted
 cd
 centric
+CLI
 coercible
 conf
 Cloudflare
@@ -26,8 +26,12 @@ CSV
 durations
 DDL
 DOM
+DSL
 DevOps
 dockerize
+enum
+Enums
+Entra
 eq
 ETH
 Ethereum
@@ -36,7 +40,6 @@ filename
 FreeBSD
 fts
 GeoJSON
-GHC
 Github
 Google
 grantor
@@ -66,9 +69,11 @@ isdistinct
 JS
 js
 JSON
+JSPath
 JWK
 JWT
 jwt
+Keycloak
 Kubernetes
 localhost
 login
@@ -92,11 +97,13 @@ npm
 nxl
 nxr
 OAuth
+ORM
 Observability
+Okta
 OpenAPI
 openapi
-ORM
 ov
+parametrized
 passphrase
 PBKDF
 PgBouncer
@@ -143,17 +150,15 @@ SHA
 signup
 SIGUSR
 sl
-spreaded
-Spreaded
 SQL
 sql
+SQLSTATE
 sr
 SSL
 stateful
 stdout
 supervisees
 SvelteKit
-syslog
 systemd
 todo
 todos

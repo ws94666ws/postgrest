@@ -3,7 +3,7 @@
 Installation
 ############
 
-The release page has `pre-compiled binaries for macOS, Windows, Linux and FreeBSD <https://github.com/PostgREST/postgrest/releases/latest>`_ .
+The release page has `pre-compiled binaries for macOS, Windows, Linux and FreeBSD <https://github.com/PostgREST/postgrest/releases/latest>`_.
 The Linux binary is a static executable that can be run on any Linux distribution.
 
 You can also use your OS package manager.
@@ -16,10 +16,11 @@ Supported PostgreSQL versions
 =============================
 
 =============== =================================
-**Supported**   PostgreSQL >= 9.6
+**Supported**   PostgreSQL >= 12
 =============== =================================
 
-PostgREST works with all PostgreSQL versions starting from 9.6.
+PostgREST works with all PostgreSQL versions still `officially supported <https://www.postgresql.org/support/versioning/>`_.
+
 
 Running PostgREST
 =================
@@ -163,14 +164,15 @@ If you want to have a visual overview of your API in your browser you can add sw
 
 .. code-block:: yaml
 
-  swagger:
-    image: swaggerapi/swagger-ui
-    ports:
-      - "8080:8080"
-    expose:
-      - "8080"
-    environment:
-      API_URL: http://localhost:3000/
+  # in services:
+    swagger:
+      image: swaggerapi/swagger-ui
+      ports:
+        - "8080:8080"
+      expose:
+        - "8080"
+      environment:
+        API_URL: http://localhost:3000/
 
 With this you can see the swagger-ui in your browser on port 8080.
 
@@ -181,13 +183,9 @@ Building from Source
 
 When a pre-built binary does not exist for your system you can build the project from source.
 
-.. note::
-
-  We discourage building and using PostgREST on **Alpine Linux** because of a reported GHC memory leak on that platform.
-
 You can build PostgREST from source with `Stack <https://github.com/commercialhaskell/stack>`_. It will install any necessary Haskell dependencies on your system.
 
-* `Install Stack <https://docs.haskellstack.org/en/stable/README/#how-to-install-stack>`_ for your platform
+* `Install Stack <https://docs.haskellstack.org/en/stable/#how-to-install-stack>`_ for your platform
 * Install Library Dependencies
 
   =====================  =======================================

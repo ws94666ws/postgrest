@@ -159,7 +159,52 @@ You can specify the literal value as we saw earlier, or reference a filename to 
 JWT Claims Validation
 ~~~~~~~~~~~~~~~~~~~~~
 
-PostgREST honors the :code:`exp` claim for token expiration, rejecting expired tokens.
+PostgREST honors the following `JWT claims <https://datatracker.ietf.org/doc/html/rfc7519#section-4.1.4>`_:
+
+- ``exp`` Expiration Time
+- ``iat`` Issued At
+- ``nbf`` Not Before
+- ``aud`` Audience, see :ref:`jwt-aud`
+
+.. note::
+  PostgREST allows for a 30-second clock skew when validating the ``exp`` and ``iat`` claims. In other words, it gives an extra 30 seconds before the token is rejected if there is a slight discrepancy in the timestamps.
+
+.. _jwt_role_claim_key_extract:
+
+JWT Role Claim Key Extraction
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A JSPath DSL that specifies the location of the :code:`role` key in the JWT claims. This can be used to consume a JWT provided by a third party service like Auth0, Okta, Microsoft Entra or Keycloak.
+
+The DSL follows the `JSONPath <https://goessner.net/articles/JsonPath/>`_ expression grammar with extended string comparison operators. Supported operators are:
+
+- ``==`` selects the first array element that exactly matches the right operand
+- ``!=`` selects the first array element that does not match the right operand
+- ``^==`` selects the first array element that starts with the right operand
+- ``==^`` selects the first array element that ends with the right operand
+- ``*==`` selects the first array element that contains the right operand
+
+Usage examples:
+
+  .. code:: bash
+
+    # {"postgrest":{"roles": ["other", "author"]}}
+    # the DSL accepts characters that are alphanumerical or one of "_$@" as keys
+    jwt-role-claim-key = ".postgrest.roles[1]"
+
+    # {"https://www.example.com/role": { "key": "author" }}
+    # non-alphanumerical characters can go inside quotes(escaped in the config value)
+    jwt-role-claim-key = ".\"https://www.example.com/role\".key"
+
+    # {"postgrest":{"roles": ["other", "author"]}}
+    # `@` represents the current element in the array
+    # all the these match the string "author"
+    jwt-role-claim-key = ".postgrest.roles[?(@ == \"author\")]"
+    jwt-role-claim-key = ".postgrest.roles[?(@ != \"other\")]"
+    jwt-role-claim-key = ".postgrest.roles[?(@ ^== \"aut\")]"
+    jwt-role-claim-key = ".postgrest.roles[?(@ ==^ \"hor\")]"
+    jwt-role-claim-key = ".postgrest.roles[?(@ *== \"utho\")]"
+
 
 JWT Security
 ~~~~~~~~~~~~
@@ -168,9 +213,7 @@ There are at least three types of common critiques against using JWT: 1) against
 
 The critique against the `JWT standard <https://datatracker.ietf.org/doc/html/rfc7519>`_ is voiced in detail `elsewhere on the web <https://web.archive.org/web/20230123041631/https://paragonie.com/blog/2017/03/jwt-json-web-tokens-is-bad-standard-that-everyone-should-avoid>`_. The most relevant part for PostgREST is the so-called :code:`alg=none` issue. Some servers implementing JWT allow clients to choose the algorithm used to sign the JWT. In this case, an attacker could set the algorithm to :code:`none`, remove the need for any signature at all and gain unauthorized access. The current implementation of PostgREST, however, does not allow clients to set the signature algorithm in the HTTP request, making this attack irrelevant. The critique against the standard is that it requires the implementation of the :code:`alg=none` at all.
 
-Critiques against JWT libraries are only relevant to PostgREST via the library it uses. As mentioned above, not allowing clients to choose the signature algorithm in HTTP requests removes the greatest risk. Another more subtle attack is possible where servers use asymmetric algorithms like RSA for signatures. Once again this is not relevant to PostgREST since it is not supported. Curious readers can find more information in `this article <https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/>`_. Recommendations about high quality libraries for usage in API clients can be found on `jwt.io <https://jwt.io/>`_.
-
-The last type of critique focuses on the misuse of JWT for maintaining web sessions. The basic recommendation is to `stop using JWT for sessions <http://cryto.net/~joepie91/blog/2016/06/13/stop-using-jwt-for-sessions/>`_ because most, if not all, solutions to the problems that arise when you do, `do not work <http://cryto.net/~joepie91/blog/2016/06/19/stop-using-jwt-for-sessions-part-2-why-your-solution-doesnt-work/>`_. The linked articles discuss the problems in depth but the essence of the problem is that JWT is not designed to be secure and stateful units for client-side storage and therefore not suited to session management.
+Another type of critique focuses on the misuse of JWT for maintaining web sessions. The basic recommendation is to `stop using JWT for sessions <http://cryto.net/~joepie91/blog/2016/06/13/stop-using-jwt-for-sessions/>`_ because most, if not all, solutions to the problems that arise when you do, `do not work <http://cryto.net/~joepie91/blog/2016/06/19/stop-using-jwt-for-sessions-part-2-why-your-solution-doesnt-work/>`_. The linked articles discuss the problems in depth but the essence of the problem is that JWT is not designed to be secure and stateful units for client-side storage and therefore not suited to session management.
 
 PostgREST uses JWT mainly for authentication and authorization purposes and encourages users to do the same. For web sessions, using cookies over HTTPS is good enough and well catered for by standard web frameworks.
 
@@ -179,7 +222,7 @@ PostgREST uses JWT mainly for authentication and authorization purposes and enco
 Custom Validation
 -----------------
 
-PostgREST does not enforce any extra constraints besides JWT validation. An example of an extra constraint would be to immediately revoke access for a certain user. Using :ref:`db-pre-request` you can specify a stored procedure to call immediately after :ref:`user_impersonation` and before the main query itself runs.
+PostgREST does not enforce any extra constraints besides JWT validation. An example of an extra constraint would be to immediately revoke access for a certain user. Using :ref:`db-pre-request` you can specify a function to call immediately after :ref:`user_impersonation` and before the main query itself runs.
 
 .. code:: ini
 

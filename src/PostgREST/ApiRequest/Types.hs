@@ -5,7 +5,6 @@ module PostgREST.ApiRequest.Types
   , Cast
   , Depth
   , EmbedParam(..)
-  , ApiRequestError(..)
   , EmbedPath
   , Field
   , Filter(..)
@@ -14,6 +13,7 @@ module PostgREST.ApiRequest.Types
   , JsonOperand(..)
   , JsonOperation(..)
   , JsonPath
+  , Language
   , ListVal
   , LogicOperator(..)
   , LogicTree(..)
@@ -24,22 +24,15 @@ module PostgREST.ApiRequest.Types
   , OrderDirection(..)
   , OrderNulls(..)
   , OrderTerm(..)
-  , QPError(..)
-  , RangeError(..)
   , SingleVal
-  , TrileanVal(..)
+  , IsVal(..)
   , SimpleOperator(..)
   , QuantOperator(..)
   , FtsOperator(..)
   , SelectItem(..)
   ) where
 
-import PostgREST.MediaType                (MediaType (..))
-import PostgREST.SchemaCache.Identifiers  (FieldName,
-                                           QualifiedIdentifier)
-import PostgREST.SchemaCache.Relationship (Relationship,
-                                           RelationshipsMap)
-import PostgREST.SchemaCache.Routine      (Routine (..))
+import PostgREST.SchemaCache.Identifiers (FieldName)
 
 import Protolude
 
@@ -66,46 +59,6 @@ data SelectItem
     , selJoinType :: Maybe JoinType
     }
   deriving (Eq, Show)
-
-data ApiRequestError
-  = AggregatesNotAllowed
-  | AmbiguousRelBetween Text Text [Relationship]
-  | AmbiguousRpc [Routine]
-  | MediaTypeError [ByteString]
-  | InvalidBody ByteString
-  | InvalidFilters
-  | InvalidPreferences [ByteString]
-  | InvalidRange RangeError
-  | InvalidRpcMethod ByteString
-  | LimitNoOrderError
-  | NotFound
-  | NoRelBetween Text Text (Maybe Text) Text RelationshipsMap
-  | NoRpc Text Text [Text] Bool MediaType Bool [QualifiedIdentifier] [Routine]
-  | NotEmbedded Text
-  | PutLimitNotAllowedError
-  | QueryParamError QPError
-  | RelatedOrderNotToOne Text Text
-  | SpreadNotToOne Text Text
-  | UnacceptableFilter Text
-  | UnacceptableSchema [Text]
-  | UnsupportedMethod ByteString
-  | ColumnNotFound Text Text
-  | GucHeadersError
-  | GucStatusError
-  | OffLimitsChangesError Int64 Integer
-  | PutMatchingPkError
-  | SingularityError Integer
-  | PGRSTParseError
-  | MaxAffectedViolationError Integer
-  deriving Show
-
-data QPError = QPError Text Text
-  deriving Show
-data RangeError
-  = NegativeLimit
-  | LowerGTUpper
-  | OutOfBounds Text Text
-  deriving Show
 
 type NodeName = Text
 type Depth = Integer
@@ -169,7 +122,7 @@ data JsonOperation
   deriving (Eq, Show, Ord)
 
 -- | Represents the key(`->'key'`) or index(`->'1`::int`), the index is Text
--- because we reuse our escaping functons and let pg do the casting with
+-- because we reuse our escaping functions and let pg do the casting with
 -- '1'::int
 data JsonOperand
   = JKey { jVal :: Text }
@@ -212,7 +165,7 @@ data Operation
   = Op SimpleOperator SingleVal
   | OpQuant QuantOperator (Maybe OpQuantifier) SingleVal
   | In ListVal
-  | Is TrileanVal
+  | Is IsVal
   | IsDistinctFrom SingleVal
   | Fts FtsOperator (Maybe Language) SingleVal
   deriving (Eq, Show)
@@ -225,12 +178,13 @@ type SingleVal = Text
 -- | Represents a list value in a filter, e.g. id=in.(val1,val2,val3)
 type ListVal = [Text]
 
--- | Three-valued logic values
-data TrileanVal
-  = TriTrue
-  | TriFalse
-  | TriNull
-  | TriUnknown
+data IsVal
+  = IsNull
+  | IsNotNull
+  -- Trilean values
+  | IsTriTrue
+  | IsTriFalse
+  | IsTriUnknown
   deriving (Eq, Show)
 
 -- Operators that are quantifiable, i.e. they can be used with the any/all modifiers

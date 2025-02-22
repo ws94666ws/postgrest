@@ -1,5 +1,5 @@
 name:               postgrest
-version:            12.1
+version:            12.3
 synopsis:           REST API for any Postgres database
 description:        Reads the schema of a PostgreSQL database and creates RESTful routes
                     for tables, views, and functions, supporting all HTTP methods that security
@@ -14,6 +14,17 @@ bug-reports:        https://github.com/PostgREST/postgrest/issues
 build-type:         Simple
 extra-source-files: CHANGELOG.md
 cabal-version:      >= 1.10
+
+tested-with:
+    -- stack on FreeBSD
+    GHC == 9.4.5
+    -- nix, cabal on Ubuntu (arm)
+  , GHC == 9.4.8
+    -- cabal on Ubuntu
+    -- stack on MacOS, Ubuntu, Windows
+  , GHC == 9.6.6
+    -- cabal on Ubuntu
+  , GHC == 9.8.2
 
 source-repository head
   type:     git
@@ -38,6 +49,8 @@ library
                       PostgREST.App
                       PostgREST.AppState
                       PostgREST.Auth
+                      PostgREST.Auth.JwtCache
+                      PostgREST.Auth.Types
                       PostgREST.CLI
                       PostgREST.Config
                       PostgREST.Config.Database
@@ -52,8 +65,12 @@ library
                       PostgREST.SchemaCache.Representations
                       PostgREST.SchemaCache.Table
                       PostgREST.Error
+                      PostgREST.Listener
                       PostgREST.Logger
                       PostgREST.MediaType
+                      PostgREST.Metrics
+                      PostgREST.Network
+                      PostgREST.Observation
                       PostgREST.Query
                       PostgREST.Query.QueryBuilder
                       PostgREST.Query.SqlFragment
@@ -88,31 +105,32 @@ library
                     , clock                     >= 0.8.3 && < 0.9.0
                     , configurator-pg           >= 0.2 && < 0.3
                     , containers                >= 0.5.7 && < 0.7
-                    , contravariant-extras      >= 0.3.3 && < 0.4
                     , cookie                    >= 0.4.2 && < 0.5
                     , directory                 >= 1.2.6 && < 1.4
                     , either                    >= 4.4.1 && < 5.1
                     , extra                     >= 1.7.0 && < 2.0
-                    , fuzzyset                  >= 0.3.0
-                    , gitrev                    >= 1.2 && < 1.4
+                    , fuzzyset                  >= 0.2.4 && < 0.3
                     , hasql                     >= 1.6.1.1 && < 1.7
                     , hasql-dynamic-statements  >= 0.3.1 && < 0.4
-                    , hasql-notifications       >= 0.2.0.6 && < 0.3
-                    , hasql-pool                >= 0.10 && < 0.11
+                    , hasql-notifications       >= 0.2.2.2 && < 0.2.3
+                    , hasql-pool                >= 1.0.1 && < 1.1
                     , hasql-transaction         >= 1.0.1 && < 1.1
                     , heredoc                   >= 0.2 && < 0.3
                     , http-types                >= 0.12.2 && < 0.13
                     , insert-ordered-containers >= 0.2.2 && < 0.3
-                    , interpolatedstring-perl6  >= 1 && < 1.1
-                    , jose                      >= 0.8.5.1 && < 0.12
+                    , iproute                   >= 1.7.0 && < 1.8
+                    , jose-jwt                  >= 0.9.6 && < 0.11
                     , lens                      >= 4.14 && < 5.3
                     , lens-aeson                >= 1.0.1 && < 1.3
                     , mtl                       >= 2.2.2 && < 2.4
+                    , neat-interpolation        >= 0.5 && < 0.6
                     , network                   >= 2.6 && < 3.2
                     , network-uri               >= 2.6.1 && < 2.8
-                    , optparse-applicative      >= 0.13 && < 0.18
+                    , optparse-applicative      >= 0.13 && < 0.19
                     , parsec                    >= 3.1.11 && < 3.2
+                    -- Technically unused, can be removed after updating to hasql >= 1.7
                     , postgresql-libpq          >= 0.10
+                    , prometheus-client         >= 1.1.1 && < 1.2.0
                     , protolude                 >= 0.3.1 && < 0.4
                     , regex-tdfa                >= 1.2.2 && < 1.4
                     , retry                     >= 0.7.4 && < 0.10
@@ -238,12 +256,11 @@ test-suite spec
                     , aeson             >= 2.0.3 && < 2.3
                     , aeson-qq          >= 0.8.1 && < 0.9
                     , async             >= 2.1.1 && < 2.3
-                    , auto-update       >= 0.1.4 && < 0.2
                     , base64-bytestring >= 1 && < 1.3
                     , bytestring        >= 0.10.8 && < 0.13
                     , case-insensitive  >= 1.2 && < 1.3
                     , containers        >= 0.5.7 && < 0.7
-                    , hasql-pool        >= 0.10 && < 0.11
+                    , hasql-pool        >= 1.0.1 && < 1.1
                     , hasql-transaction >= 1.0.1 && < 1.1
                     , heredoc           >= 0.2 && < 0.3
                     , hspec             >= 2.3 && < 2.12

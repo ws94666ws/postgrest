@@ -11,10 +11,11 @@ let
         name = "postgrest-build";
         docs = "Build PostgREST interactively using cabal-install.";
         args = [ "ARG_LEFTOVERS([Cabal arguments])" ];
-        inRootDir = true;
+        workingDir = "/";
         withEnv = postgrest.env;
       }
       ''
+        ${cabal-install}/bin/cabal v2-update
         exec ${cabal-install}/bin/cabal v2-build ${devCabalOptions} "''${_arg_leftovers[@]}"
       '';
 
@@ -23,7 +24,7 @@ let
       {
         name = "postgrest-clean";
         docs = "Clean the PostgREST project, including all cabal-install artifacts.";
-        inRootDir = true;
+        workingDir = "/";
       }
       ''
         # clean old coverage data, too
@@ -42,16 +43,18 @@ let
           [
             "ARG_USE_ENV([PGRST_DB_ANON_ROLE], [postgrest_test_anonymous], [PostgREST anonymous role])"
             "ARG_USE_ENV([PGRST_DB_POOL], [1], [PostgREST pool size])"
-            "ARG_USE_ENV([PGRST_DB_POOL_ACQUISITION_TIMEOUT], [1], [PostgREST pool size])"
+            "ARG_USE_ENV([PGRST_DB_POOL_ACQUISITION_TIMEOUT], [1], [PostgREST pool timeout])"
+            "ARG_USE_ENV([PGRST_JWT_SECRET], [reallyreallyreallyreallyverysafe], [PostgREST JWT secret])"
             "ARG_LEFTOVERS([PostgREST arguments])"
           ];
-        inRootDir = true;
+        workingDir = "/";
         withEnv = postgrest.env;
       }
       ''
         export PGRST_DB_ANON_ROLE
         export PGRST_DB_POOL
         export PGRST_DB_POOL_ACQUISITION_TIMEOUT
+        export PGRST_JWT_SECRET
 
         exec ${cabal-install}/bin/cabal v2-run ${devCabalOptions} --verbose=0 -- \
           postgrest "''${_arg_leftovers[@]}"
@@ -63,7 +66,7 @@ let
         name = "postgrest-repl";
         docs = "Interact with PostgREST modules using the cabal repl";
         args = [ "ARG_LEFTOVERS([cabal v2-repl arguments])" ];
-        inRootDir = true;
+        workingDir = "/";
         withEnv = postgrest.env;
       }
       ''
@@ -73,10 +76,11 @@ in
 buildToolbox
 {
   name = "postgrest-cabal";
-  tools = [
-    build
-    clean
-    run
-    repl
-  ];
+  tools = {
+    inherit
+      build
+      clean
+      run
+      repl;
+  };
 }

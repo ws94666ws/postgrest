@@ -61,6 +61,7 @@ class PostgrestProcess:
         "Wait for line(s) on standard output."
         output = []
         for _ in range(10):
+            self.process.stdout.flush()
             l = self.process.stdout.readline()
             if l:
                 output.append(l.decode())
@@ -68,6 +69,13 @@ class PostgrestProcess:
                     break
             time.sleep(0.1)
         return output
+
+    def wait_until_scache_starts_loading(self, max_seconds=1):
+        "Wait for the admin /ready return a status of 503"
+
+        wait_until_status_code(
+            self.admin.baseurl + "/ready", max_seconds=max_seconds, status_code=503
+        )
 
 
 @contextlib.contextmanager
@@ -78,6 +86,7 @@ def run(
     port=None,
     host=None,
     wait_for_readiness=True,
+    wait_max_seconds=1,
     no_pool_connection_available=False,
     no_startup_stdout=True,
 ):
@@ -93,7 +102,7 @@ def run(
             env["PGRST_SERVER_UNIX_SOCKET"] = str(socketfile)
             baseurl = "http+unix://" + urllib.parse.quote_plus(str(socketfile))
 
-        adminport = freeport()
+        adminport = freeport(port)
         env["PGRST_ADMIN_SERVER_PORT"] = str(adminport)
         adminurl = f"http://localhost:{adminport}"
 
@@ -118,7 +127,7 @@ def run(
             process.stdin.close()
 
             if wait_for_readiness:
-                wait_until_ready(adminurl + "/ready")
+                wait_until_status_code(adminurl + "/ready", wait_max_seconds, 200)
 
             if no_startup_stdout:
                 process.stdout.read()
@@ -160,12 +169,15 @@ def metapostgrest():
         yield postgrest
 
 
-def freeport():
+def freeport(used_port=None):
     "Find a free port on localhost."
-    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-        s.bind(("", 0))
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return s.getsockname()[1]
+    while True:
+        with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+            s.bind(("", 0))
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            port = s.getsockname()[1]
+            if port != used_port:
+                return port
 
 
 def wait_until_exit(postgrest):
@@ -176,15 +188,14 @@ def wait_until_exit(postgrest):
         raise PostgrestTimedOut()
 
 
-def wait_until_ready(url):
-    "Wait for the given HTTP endpoint to return a status of 200."
+def wait_until_status_code(url, max_seconds, status_code):
+    "Wait for the given HTTP endpoint to return a status code"
     session = requests_unixsocket.Session()
 
-    response = None
-    for _ in range(10):
+    for _ in range(max_seconds * 10):
         try:
             response = session.get(url, timeout=1)
-            if response.status_code == 200:
+            if response.status_code == status_code:
                 return
         except (requests.ConnectionError, requests.ReadTimeout):
             pass

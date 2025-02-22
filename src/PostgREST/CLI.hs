@@ -14,11 +14,11 @@ import qualified Data.ByteString.Lazy       as LBS
 import qualified Hasql.Transaction.Sessions as SQL
 import qualified Options.Applicative        as O
 
-import Data.Text.IO (hPutStrLn)
 import Text.Heredoc (str)
 
 import PostgREST.AppState    (AppState)
 import PostgREST.Config      (AppConfig (..))
+import PostgREST.Observation (Observation (..))
 import PostgREST.SchemaCache (querySchemaCache)
 import PostgREST.Version     (prettyVersion)
 
@@ -26,7 +26,7 @@ import qualified PostgREST.App      as App
 import qualified PostgREST.AppState as AppState
 import qualified PostgREST.Config   as Config
 
-import Protolude hiding (hPutStrLn)
+import Protolude
 
 
 main :: CLI -> IO ()
@@ -42,9 +42,11 @@ main CLI{cliCommand, cliPath} = do
     AppState.destroy
     (\appState -> case cliCommand of
       CmdDumpConfig -> do
-        when configDbConfig $ AppState.reReadConfig True appState
+        when configDbConfig $ AppState.readInDbConfig True appState
         putStr . Config.toText =<< AppState.getConfig appState
-      CmdDumpSchema -> putStrLn =<< dumpSchema appState
+      CmdDumpSchema -> do
+        when configDbConfig $ AppState.readInDbConfig True appState
+        putStrLn =<< dumpSchema appState
       CmdRun -> App.run appState)
 
 -- | Dump SchemaCache schema to JSON
@@ -53,12 +55,12 @@ dumpSchema appState = do
   conf@AppConfig{..} <- AppState.getConfig appState
   result <-
     let transaction = if configDbPreparedStatements then SQL.transaction else SQL.unpreparedTransaction in
-    AppState.usePool appState conf $
-      transaction SQL.ReadCommitted SQL.Read $
-        querySchemaCache conf
+    AppState.usePool appState
+      (transaction SQL.ReadCommitted SQL.Read $ querySchemaCache conf)
   case result of
     Left e -> do
-      hPutStrLn stderr $ "An error ocurred when loading the schema cache:\n" <> show e
+      let observer = AppState.getObserver appState
+      observer $ SchemaCacheErrorObs e
       exitFailure
     Right sCache -> return $ JSON.encode sCache
 
@@ -204,8 +206,11 @@ exampleConfigFile =
       |## Enables and set JWT Cache max lifetime, disables caching with 0
       |# jwt-cache-max-lifetime = 0
       |
-      |## Logging level, the admitted values are: crit, error, warn and info.
+      |## Logging level, the admitted values are: crit, error, warn, info and debug.
       |log-level = "error"
+      |
+      |## Log the requested SQL query at the current log-level.
+      |log-query = "disabled"
       |
       |## Determine if the OpenAPI output should follow or ignore role privileges or be disabled entirely.
       |## Admitted values: follow-privileges, ignore-privileges, disabled

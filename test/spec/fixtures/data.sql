@@ -680,41 +680,33 @@ INSERT INTO private.films (id, title) VALUES (12,'douze commandements'), (2001,'
 TRUNCATE TABLE private.personnages CASCADE;
 INSERT INTO private.personnages (film_id, role_id, character) VALUES (12,1,'méchant'), (2001,2,'astronaute');
 
-DO $do$BEGIN
-  IF (SELECT current_setting('server_version_num')::INT >= 100000) THEN
-    INSERT INTO test.car_models(name, year) VALUES ('DeLorean',1981);
-    INSERT INTO test.car_models(name, year) VALUES ('F310-B',1997);
-    INSERT INTO test.car_models(name, year) VALUES ('Veneno',2013);
-    INSERT INTO test.car_models(name, year) VALUES ('Murcielago',2001);
-  END IF;
+INSERT INTO test.car_models(name, year) VALUES ('DeLorean',1981);
+INSERT INTO test.car_models(name, year) VALUES ('F310-B',1997);
+INSERT INTO test.car_models(name, year) VALUES ('Veneno',2013);
+INSERT INTO test.car_models(name, year) VALUES ('Murcielago',2001);
 
-  IF (SELECT current_setting('server_version_num')::INT >= 110000) THEN
-    INSERT INTO test.car_brands(name) VALUES ('DMC');
-    INSERT INTO test.car_brands(name) VALUES ('Ferrari');
-    INSERT INTO test.car_brands(name) VALUES ('Lamborghini');
+INSERT INTO test.car_brands(name) VALUES ('DMC');
+INSERT INTO test.car_brands(name) VALUES ('Ferrari');
+INSERT INTO test.car_brands(name) VALUES ('Lamborghini');
 
-    UPDATE test.car_models SET car_brand_name = 'DMC' WHERE name = 'DeLorean';
-    UPDATE test.car_models SET car_brand_name = 'Ferrari' WHERE name = 'F310-B';
-    UPDATE test.car_models SET car_brand_name = 'Lamborghini' WHERE name = 'Veneno';
-    UPDATE test.car_models SET car_brand_name = 'Lamborghini' WHERE name = 'Murcielago';
-  END IF;
+UPDATE test.car_models SET car_brand_name = 'DMC' WHERE name = 'DeLorean';
+UPDATE test.car_models SET car_brand_name = 'Ferrari' WHERE name = 'F310-B';
+UPDATE test.car_models SET car_brand_name = 'Lamborghini' WHERE name = 'Veneno';
+UPDATE test.car_models SET car_brand_name = 'Lamborghini' WHERE name = 'Murcielago';
 
-  IF (SELECT current_setting('server_version_num')::INT >= 120000) THEN
-    INSERT INTO test.car_model_sales(date, quantity, car_model_name, car_model_year) VALUES ('2021-01-14',7,'DeLorean',1981);
-    INSERT INTO test.car_model_sales(date, quantity, car_model_name, car_model_year) VALUES ('2021-01-15',9,'DeLorean',1981);
-    INSERT INTO test.car_model_sales(date, quantity, car_model_name, car_model_year) VALUES ('2021-02-11',1,'Murcielago',2001);
-    INSERT INTO test.car_model_sales(date, quantity, car_model_name, car_model_year) VALUES ('2021-02-12',3,'Murcielago',2001);
+INSERT INTO test.car_model_sales(date, quantity, car_model_name, car_model_year) VALUES ('2021-01-14',7,'DeLorean',1981);
+INSERT INTO test.car_model_sales(date, quantity, car_model_name, car_model_year) VALUES ('2021-01-15',9,'DeLorean',1981);
+INSERT INTO test.car_model_sales(date, quantity, car_model_name, car_model_year) VALUES ('2021-02-11',1,'Murcielago',2001);
+INSERT INTO test.car_model_sales(date, quantity, car_model_name, car_model_year) VALUES ('2021-02-12',3,'Murcielago',2001);
 
-    INSERT INTO test.car_racers(name) VALUES ('Alain Prost');
-    INSERT INTO test.car_racers(name, car_model_name, car_model_year) VALUES ('Michael Schumacher', 'F310-B', 1997);
+INSERT INTO test.car_racers(name) VALUES ('Alain Prost');
+INSERT INTO test.car_racers(name, car_model_name, car_model_year) VALUES ('Michael Schumacher', 'F310-B', 1997);
 
-    INSERT INTO test.car_dealers(name,city) VALUES ('Springfield Cars S.A.','Springfield');
-    INSERT INTO test.car_dealers(name,city) VALUES ('The Best Deals S.A.','Franklin');
+INSERT INTO test.car_dealers(name,city) VALUES ('Springfield Cars S.A.','Springfield');
+INSERT INTO test.car_dealers(name,city) VALUES ('The Best Deals S.A.','Franklin');
 
-    INSERT INTO test.car_models_car_dealers(car_model_name, car_model_year, car_dealer_name, car_dealer_city, quantity) VALUES ('DeLorean',1981,'Springfield Cars S.A.','Springfield',15);
-    INSERT INTO test.car_models_car_dealers(car_model_name, car_model_year, car_dealer_name, car_dealer_city, quantity) VALUES ('Murcielago',2001,'The Best Deals S.A.','Franklin',2);
-  END IF;
-END$do$;
+INSERT INTO test.car_models_car_dealers(car_model_name, car_model_year, car_dealer_name, car_dealer_city, quantity) VALUES ('DeLorean',1981,'Springfield Cars S.A.','Springfield',15);
+INSERT INTO test.car_models_car_dealers(car_model_name, car_model_year, car_dealer_name, car_dealer_city, quantity) VALUES ('Murcielago',2001,'The Best Deals S.A.','Franklin',2);
 
 TRUNCATE TABLE test.products CASCADE;
 INSERT INTO test.products (id, name) VALUES (1,'product-1'), (2,'product-2'), (3,'product-3');
@@ -748,24 +740,6 @@ INSERT INTO test.fav_numbers VALUES (ROW(0.5, 0.5), 'A'),  (ROW(0.6, 0.6), 'B');
 
 TRUNCATE TABLE test.arrays CASCADE;
 INSERT INTO test.arrays VALUES (0, '{1,2,3}', '{{1,2,3},{4,5,6},{7,8,9}}'), (1, '{11,12,13}', '{{11,12,13},{14,15,16},{17,18,19}}');
-
-TRUNCATE TABLE test.limited_update_items CASCADE;
-INSERT INTO test.limited_update_items VALUES (1, 'item-1'), (2, 'item-2'), (3, 'item-3');
-
-TRUNCATE TABLE test.limited_update_items_cpk CASCADE;
-INSERT INTO test.limited_update_items_cpk VALUES (1, 'item-1'), (2, 'item-2'), (3, 'item-3');
-
-TRUNCATE TABLE test.limited_update_items_no_pk CASCADE;
-INSERT INTO test.limited_update_items_no_pk VALUES (1, 'item-1'), (2, 'item-2'), (3, 'item-3');
-
-TRUNCATE TABLE test.limited_delete_items CASCADE;
-INSERT INTO test.limited_delete_items VALUES (1, 'item-1'), (2, 'item-2'), (3, 'item-3');
-
-TRUNCATE TABLE test.limited_delete_items_cpk CASCADE;
-INSERT INTO test.limited_delete_items_cpk VALUES (1, 'item-1'), (2, 'item-2'), (3, 'item-3');
-
-TRUNCATE TABLE test.limited_delete_items_no_pk CASCADE;
-INSERT INTO test.limited_delete_items_no_pk VALUES (1, 'item-1'), (2, 'item-2'), (3, 'item-3');
 
 TRUNCATE TABLE test.xmltest CASCADE;
 INSERT INTO test.xmltest VALUES
@@ -891,3 +865,59 @@ INSERT INTO budget_expenses VALUES (1, 200.26, 1);
 INSERT INTO budget_expenses VALUES (2, 400.26, 3);
 INSERT INTO budget_expenses VALUES (3, 100.22, 4);
 INSERT INTO budget_expenses VALUES (5, 900.27, 5);
+
+TRUNCATE TABLE factories CASCADE;
+INSERT INTO factories VALUES (1, 'Factory A');
+INSERT INTO factories VALUES (2, 'Factory B');
+INSERT INTO factories VALUES (3, 'Factory C');
+INSERT INTO factories VALUES (4, 'Factory D');
+
+TRUNCATE TABLE process_categories CASCADE;
+INSERT INTO process_categories VALUES (1, 'Batch');
+INSERT INTO process_categories VALUES (2, 'Mass');
+
+TRUNCATE TABLE processes CASCADE;
+INSERT INTO processes VALUES (1, 'Process A1', 1, 1);
+INSERT INTO processes VALUES (2, 'Process A2', 1, 2);
+INSERT INTO processes VALUES (3, 'Process B1', 2, 1);
+INSERT INTO processes VALUES (4, 'Process B2', 2, 1);
+INSERT INTO processes VALUES (5, 'Process C1', 3, 2);
+INSERT INTO processes VALUES (6, 'Process C2', 3, 2);
+
+TRUNCATE TABLE process_costs CASCADE;
+INSERT INTO process_costs VALUES (1, 150.00);
+INSERT INTO process_costs VALUES (2, 200.00);
+INSERT INTO process_costs VALUES (3, 180.00);
+INSERT INTO process_costs VALUES (4, 70.00);
+INSERT INTO process_costs VALUES (5, 120.00);
+
+TRUNCATE TABLE supervisors CASCADE;
+INSERT INTO supervisors VALUES (1, 'Mary');
+INSERT INTO supervisors VALUES (2, 'John');
+INSERT INTO supervisors VALUES (3, 'Peter');
+INSERT INTO supervisors VALUES (4, 'Sarah');
+
+TRUNCATE TABLE process_supervisor CASCADE;
+INSERT INTO process_supervisor VALUES (1, 1);
+INSERT INTO process_supervisor VALUES (2, 2);
+INSERT INTO process_supervisor VALUES (3, 3);
+INSERT INTO process_supervisor VALUES (3, 4);
+INSERT INTO process_supervisor VALUES (4, 1);
+INSERT INTO process_supervisor VALUES (4, 2);
+INSERT INTO process_supervisor VALUES (5, 3);
+INSERT INTO process_supervisor VALUES (6, 3);
+
+TRUNCATE TABLE surr_serial_upsert CASCADE;
+INSERT INTO surr_serial_upsert(name, extra) VALUES ('value', 'existing value');
+
+TRUNCATE TABLE surr_gen_default_upsert CASCADE;
+INSERT INTO surr_gen_default_upsert(name, extra) VALUES ('value', 'existing value');
+
+TRUNCATE TABLE tsearch_to_tsvector CASCADE;
+INSERT INTO tsearch_to_tsvector(text_search) VALUES ('It''s kind of fun to do the impossible');
+INSERT INTO tsearch_to_tsvector(text_search) VALUES ('But also fun to do what is possible');
+INSERT INTO tsearch_to_tsvector(text_search) VALUES ('Fat cats ate rats');
+INSERT INTO tsearch_to_tsvector(text_search) VALUES ('C''est un peu amusant de faire l''impossible');
+INSERT INTO tsearch_to_tsvector(text_search) VALUES ('Es ist eine Art Spaß, das Unmögliche zu machen');
+
+UPDATE tsearch_to_tsvector SET jsonb_search = jsonb_build_object('text_search', text_search);

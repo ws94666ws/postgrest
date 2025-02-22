@@ -67,9 +67,11 @@ PostgREST translates `PostgreSQL error codes <https://www.postgresql.org/docs/cu
 +--------------------------+-------------------------+---------------------------------+
 | 40*                      | 500                     | transaction rollback            |
 +--------------------------+-------------------------+---------------------------------+
+| 53400                    | 500                     | config limit exceeded           |
++--------------------------+-------------------------+---------------------------------+
 | 53*                      | 503                     | insufficient resources          |
 +--------------------------+-------------------------+---------------------------------+
-| 54*                      | 413                     | too complex                     |
+| 54*                      | 500                     | too complex                     |
 +--------------------------+-------------------------+---------------------------------+
 | 55*                      | 500                     | obj not in prerequisite state   |
 +--------------------------+-------------------------+---------------------------------+
@@ -90,6 +92,8 @@ PostgREST translates `PostgreSQL error codes <https://www.postgresql.org/docs/cu
 | 42883                    | 404                     | undefined function              |
 +--------------------------+-------------------------+---------------------------------+
 | 42P01                    | 404                     | undefined table                 |
++--------------------------+-------------------------+---------------------------------+
+| 42P17                    | 500                     | infinite recursion              |
 +--------------------------+-------------------------+---------------------------------+
 | 42501                    | | if authenticated 403, | insufficient privileges         |
 |                          | | else 401              |                                 |
@@ -173,7 +177,7 @@ Related to the HTTP request elements.
 |               |             | See :ref:`h_filter`, :ref:`operators` and :ref:`ordering`.  |
 | PGRST100      |             |                                                             |
 +---------------+-------------+-------------------------------------------------------------+
-| .. _pgrst101: | 405         | For :ref:`functions <s_procs>`, only ``GET`` and ``POST``   |
+| .. _pgrst101: | 405         | For :ref:`functions <functions>`, only ``GET`` and ``POST`` |
 |               |             | verbs are allowed. Any other verb will throw this error.    |
 | PGRST101      |             |                                                             |
 +---------------+-------------+-------------------------------------------------------------+
@@ -200,14 +204,6 @@ Related to the HTTP request elements.
 | .. _pgrst108: | 400         | The filter is applied to a embedded resource that is not    |
 |               |             | specified in the ``select`` part of the query string.       |
 | PGRST108      |             | See :ref:`embed_filters`.                                   |
-+---------------+-------------+-------------------------------------------------------------+
-| .. _pgrst109: | 400         | Restricting a Deletion or an Update using limits must       |
-|               |             | include the ordering of a unique column.                    |
-| PGRST109      |             | See :ref:`limited_update_delete`.                           |
-+---------------+-------------+-------------------------------------------------------------+
-| .. _pgrst110: | 400         | When restricting a Deletion or an Update using limits       |
-|               |             | modifies more rows than the maximum specified in the limit. |
-| PGRST110      |             | See :ref:`limited_update_delete`.                           |
 +---------------+-------------+-------------------------------------------------------------+
 | .. _pgrst111: | 500         | An invalid ``response.headers`` was set.                    |
 |               |             | See :ref:`guc_resp_hdrs`.                                   |
@@ -245,7 +241,7 @@ Related to the HTTP request elements.
 |               |             | ``is.null`` or ``not.is.null`` :ref:`operators <operators>`.|
 | PGRST120      |             |                                                             |
 +---------------+-------------+-------------------------------------------------------------+
-| .. _pgrst121: | 400         | PostgREST can't parse the JSON objects in RAISE             |
+| .. _pgrst121: | 500         | PostgREST can't parse the JSON objects in RAISE             |
 |               |             | ``PGRST`` error. See :ref:`raise headers <raise_headers>`.  |
 | PGRST121      |             |                                                             |
 +---------------+-------------+-------------------------------------------------------------+
@@ -253,13 +249,17 @@ Related to the HTTP request elements.
 |               |             | ``Prefer: handling=strict``. See :ref:`prefer_handling`.    |
 | PGRST122      |             |                                                             |
 +---------------+-------------+-------------------------------------------------------------+
+| .. _pgrst123: | 400         | Aggregate functions are disabled.                           |
+|               |             | See :ref:`db-aggregates-enabled`.                           |
+| PGRST123      |             |                                                             |
++---------------+-------------+-------------------------------------------------------------+
 
 .. _pgrst2**:
 
 Group 2 - Schema Cache
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Related to a :ref:`stale schema cache <stale_schema>`. Most of the time, these errors are solved by :ref:`reloading the schema cache <schema_reloading>`.
+Related to a :ref:`schema_cache`. Most of the time, these errors are solved by :ref:`schema_reloading`.
 
 +---------------+-------------+-------------------------------------------------------------+
 | Code          | HTTP status | Description                                                 |
@@ -285,6 +285,10 @@ Related to a :ref:`stale schema cache <stale_schema>`. Most of the time, these e
 | .. _pgrst204: | 400         | Caused when the :ref:`column specified <specify_columns>`   |
 |               |             | in the ``columns`` query parameter is not found.            |
 | PGRST204      |             |                                                             |
++---------------+-------------+-------------------------------------------------------------+
+| .. _pgrst205: | 404         | Caused when the :ref:`table specified <tables_views>` in    |
+|               |             | the URI is not found.                                       |
+| PGRST205      |             |                                                             |
 +---------------+-------------+-------------------------------------------------------------+
 
 .. _pgrst3**:
@@ -337,9 +341,9 @@ You can customize the errors by using the `RAISE statement <https://www.postgres
 RAISE errors with HTTP Status Codes
 -----------------------------------
 
-Custom status codes can be done by raising SQL exceptions inside :ref:`functions <s_procs>`. For instance, here's a saucy function that always responds with an error:
+Custom status codes can be done by raising SQL exceptions inside :ref:`functions <functions>`. For instance, here's a saucy function that always responds with an error:
 
-.. code-block:: postgresql
+.. code-block:: postgres
 
   CREATE OR REPLACE FUNCTION just_fail() RETURNS void
     LANGUAGE plpgsql
@@ -366,7 +370,7 @@ One way to customize the HTTP status code is by raising particular exceptions ac
 
 For even greater control of the HTTP status code, raise an exception of the ``PTxyz`` type. For instance to respond with HTTP 402, raise ``PT402``:
 
-.. code-block:: sql
+.. code-block:: postgres
 
   RAISE sqlstate 'PT402' using
     message = 'Payment Required',
@@ -392,9 +396,9 @@ Returns:
 Add HTTP Headers with RAISE
 ---------------------------
 
-For full control over headers and status you can raise a ``PGRST`` SQLSTATE error. You can achieve this by adding the ``code``, ``message``, ``detail`` and ``hint`` in the postgresql error message field as a JSON object. Here, the ``details`` and ``hint`` are optional. Similarly, the ``status`` and ``headers`` must be added to the SQL error detail field as a JSON object. For instance:
+For full control over headers and status you can raise a ``PGRST`` SQLSTATE error. You can achieve this by adding the ``code``, ``message``, ``detail`` and ``hint`` in the PostgreSQL error message field as a JSON object. Here, the ``details`` and ``hint`` are optional. Similarly, the ``status`` and ``headers`` must be added to the SQL error detail field as a JSON object. For instance:
 
-.. code-block:: sql
+.. code-block:: postgres
 
   RAISE sqlstate 'PGRST' USING
       message = '{"code":"123","message":"Payment Required","details":"Quota exceeded","hint":"Upgrade your plan"}',
@@ -418,10 +422,8 @@ Returns:
 
 For non standard HTTP status, you can optionally add ``status_text`` to describe the status code. For status code ``419`` the detail field may look like this:
 
-.. code-block:: sql
+.. code-block:: postgres
 
   detail = '{"status":419,"status_text":"Page Expired","headers":{"X-Powered-By":"Nerd Rage"}}';
 
 If PostgREST can't parse the JSON objects ``message`` and ``detail``, it will throw a ``PGRST121`` error. See :ref:`Errors from PostgREST<pgrst1**>`.
-
-

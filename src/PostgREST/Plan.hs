@@ -16,17 +16,15 @@ resource.
 {-# LANGUAGE RecordWildCards       #-}
 
 module PostgREST.Plan
-  ( wrappedReadPlan
-  , mutateReadPlan
-  , callReadPlan
-  , inspectPlan
-  , WrappedReadPlan(..)
-  , MutateReadPlan(..)
-  , CallReadPlan(..)
+  ( actionPlan
+  , ActionPlan(..)
+  , DbActionPlan(..)
   , InspectPlan(..)
+  , InfoPlan(..)
+  , CrudPlan(..)
+  , CallReadPlan(..)
   ) where
 
-import qualified Data.ByteString.Lazy          as LBS
 import qualified Data.HashMap.Strict           as HM
 import qualified Data.HashMap.Strict.InsOrd    as HMI
 import qualified Data.List                     as L
@@ -39,11 +37,13 @@ import Data.Tree               (Tree (..))
 
 import PostgREST.ApiRequest                  (Action (..),
                                               ApiRequest (..),
+                                              DbAction (..),
                                               InvokeMethod (..),
                                               Mutation (..),
                                               Payload (..))
 import PostgREST.Config                      (AppConfig (..))
-import PostgREST.Error                       (Error (..))
+import PostgREST.Error                       (ApiRequestError (..),
+                                              Error (..))
 import PostgREST.MediaType                   (MediaType (..))
 import PostgREST.Query.SqlFragment           (sourceCTEName)
 import PostgREST.RangeQuery                  (NonnegRange, allRange,
@@ -92,75 +92,104 @@ import Protolude hiding (from)
 -- Setup for doctests
 -- >>> import Data.Ranged.Ranges (fullRange)
 
-data WrappedReadPlan = WrappedReadPlan {
-  wrReadPlan :: ReadPlanTree
-, wrTxMode   :: SQL.Mode
-, wrHandler  :: MediaHandler
-, wrMedia    :: MediaType
-}
-
-data MutateReadPlan = MutateReadPlan {
-  mrReadPlan   :: ReadPlanTree
-, mrMutatePlan :: MutatePlan
-, mrTxMode     :: SQL.Mode
-, mrHandler    :: MediaHandler
-, mrMedia      :: MediaType
-}
+data CrudPlan
+  = WrappedReadPlan
+  { wrReadPlan :: ReadPlanTree
+  , pTxMode    :: SQL.Mode
+  , wrHandler  :: MediaHandler
+  , wrMedia    :: MediaType
+  , wrHdrsOnly :: Bool
+  , crudQi     :: QualifiedIdentifier
+  }
+  | MutateReadPlan {
+    mrReadPlan   :: ReadPlanTree
+  , mrMutatePlan :: MutatePlan
+  , pTxMode      :: SQL.Mode
+  , mrHandler    :: MediaHandler
+  , mrMedia      :: MediaType
+  , mrMutation   :: Mutation
+  , crudQi       :: QualifiedIdentifier
+  }
 
 data CallReadPlan = CallReadPlan {
-  crReadPlan :: ReadPlanTree
-, crCallPlan :: CallPlan
-, crTxMode   :: SQL.Mode
-, crProc     :: Routine
-, crHandler  :: MediaHandler
-, crMedia    :: MediaType
-}
+    crReadPlan :: ReadPlanTree
+  , crCallPlan :: CallPlan
+  , crTxMode   :: SQL.Mode
+  , crProc     :: Routine
+  , crHandler  :: MediaHandler
+  , crMedia    :: MediaType
+  , crInvMthd  :: InvokeMethod
+  , crQi       :: QualifiedIdentifier
+  }
 
 data InspectPlan = InspectPlan {
-  ipMedia  :: MediaType
-, ipTxmode :: SQL.Mode
-}
+    ipMedia    :: MediaType
+  , ipTxmode   :: SQL.Mode
+  , ipHdrsOnly :: Bool
+  , ipSchema   :: Schema
+  }
 
-wrappedReadPlan :: QualifiedIdentifier -> AppConfig -> SchemaCache -> ApiRequest -> Either Error WrappedReadPlan
-wrappedReadPlan  identifier conf sCache apiRequest@ApiRequest{iPreferences=Preferences{..},..} = do
-  rPlan <- readPlan identifier conf sCache apiRequest
-  (handler, mediaType)  <- mapLeft ApiRequestError $ negotiateContent conf apiRequest identifier iAcceptMediaType (dbMediaHandlers sCache) (hasDefaultSelect rPlan)
+data DbActionPlan = DbCrud CrudPlan | DbCall CallReadPlan | MaybeDb InspectPlan
+data InfoPlan     = RelInfoPlan QualifiedIdentifier | RoutineInfoPlan CallReadPlan | SchemaInfoPlan
+data ActionPlan   = Db DbActionPlan | NoDb InfoPlan
+
+actionPlan :: Action -> AppConfig -> ApiRequest -> SchemaCache -> Either Error ActionPlan
+actionPlan act conf apiReq sCache = case act of
+    ActDb dbAct              -> Db <$> dbActionPlan dbAct conf apiReq sCache
+    ActRelationInfo ident    -> pure . NoDb $ RelInfoPlan ident
+    ActRoutineInfo ident inv -> NoDb . RoutineInfoPlan <$> callReadPlan ident conf sCache apiReq inv
+    ActSchemaInfo            -> pure $ NoDb SchemaInfoPlan
+
+dbActionPlan :: DbAction -> AppConfig -> ApiRequest -> SchemaCache -> Either Error DbActionPlan
+dbActionPlan dbAct conf apiReq sCache = case dbAct of
+  ActRelationRead identifier headersOnly ->
+    DbCrud <$> wrappedReadPlan identifier conf sCache apiReq headersOnly
+  ActRelationMut identifier mut ->
+    DbCrud <$> mutateReadPlan mut apiReq identifier conf sCache
+  ActRoutine identifier invMethod ->
+    DbCall <$> callReadPlan identifier conf sCache apiReq invMethod
+  ActSchemaRead tSchema headersOnly ->
+    MaybeDb <$> inspectPlan apiReq headersOnly tSchema
+
+wrappedReadPlan :: QualifiedIdentifier -> AppConfig -> SchemaCache -> ApiRequest -> Bool -> Either Error CrudPlan
+wrappedReadPlan  identifier conf sCache apiRequest@ApiRequest{iPreferences=Preferences{..},..} headersOnly = do
+  qi <- mapLeft ApiRequestError $ findTable identifier (dbTables sCache)
+  rPlan <- readPlan qi conf sCache apiRequest
+  (handler, mediaType)  <- mapLeft ApiRequestError $ negotiateContent conf apiRequest qi iAcceptMediaType (dbMediaHandlers sCache) (hasDefaultSelect rPlan)
   if not (null invalidPrefs) && preferHandling == Just Strict then Left $ ApiRequestError $ InvalidPreferences invalidPrefs else Right ()
-  return $ WrappedReadPlan rPlan SQL.Read handler mediaType
+  return $ WrappedReadPlan rPlan SQL.Read handler mediaType headersOnly qi
 
-mutateReadPlan :: Mutation -> ApiRequest -> QualifiedIdentifier -> AppConfig -> SchemaCache -> Either Error MutateReadPlan
+mutateReadPlan :: Mutation -> ApiRequest -> QualifiedIdentifier -> AppConfig -> SchemaCache -> Either Error CrudPlan
 mutateReadPlan  mutation apiRequest@ApiRequest{iPreferences=Preferences{..},..} identifier conf sCache = do
-  rPlan <- readPlan identifier conf sCache apiRequest
-  mPlan <- mutatePlan mutation identifier apiRequest sCache rPlan
+  qi <- mapLeft ApiRequestError $ findTable identifier (dbTables sCache)
+  rPlan <- readPlan qi conf sCache apiRequest
+  mPlan <- mutatePlan mutation qi apiRequest sCache rPlan
   if not (null invalidPrefs) && preferHandling == Just Strict then Left $ ApiRequestError $ InvalidPreferences invalidPrefs else Right ()
-  (handler, mediaType)  <- mapLeft ApiRequestError $ negotiateContent conf apiRequest identifier iAcceptMediaType (dbMediaHandlers sCache) (hasDefaultSelect rPlan)
-  return $ MutateReadPlan rPlan mPlan SQL.Write handler mediaType
+  (handler, mediaType)  <- mapLeft ApiRequestError $ negotiateContent conf apiRequest qi iAcceptMediaType (dbMediaHandlers sCache) (hasDefaultSelect rPlan)
+  return $ MutateReadPlan rPlan mPlan SQL.Write handler mediaType mutation qi
 
 callReadPlan :: QualifiedIdentifier -> AppConfig -> SchemaCache -> ApiRequest -> InvokeMethod -> Either Error CallReadPlan
-callReadPlan identifier conf sCache apiRequest@ApiRequest{iPreferences=Preferences{..},..} invMethod = do
+callReadPlan identifier conf sCache apiRequest@ApiRequest{iPreferences=Preferences{preferHandling, invalidPrefs},..} invMethod = do
   let paramKeys = case invMethod of
-        InvGet  -> S.fromList $ fst <$> qsParams'
-        InvHead -> S.fromList $ fst <$> qsParams'
-        InvPost -> iColumns
+        InvRead _ -> S.fromList $ fst <$> qsParams'
+        Inv       -> iColumns
   proc@Function{..} <- mapLeft ApiRequestError $
-    findProc identifier paramKeys (preferParameters == Just SingleObject) (dbRoutines sCache) iContentMediaType (invMethod == InvPost)
+    findProc identifier paramKeys (dbRoutines sCache) iContentMediaType (invMethod == Inv)
   let relIdentifier = QualifiedIdentifier pdSchema (fromMaybe pdName $ Routine.funcTableName proc) -- done so a set returning function can embed other relations
   rPlan <- readPlan relIdentifier conf sCache apiRequest
   let args = case (invMethod, iContentMediaType) of
-        (InvGet, _)             -> jsonRpcParams proc qsParams'
-        (InvHead, _)            -> jsonRpcParams proc qsParams'
-        (InvPost, MTUrlEncoded) -> maybe mempty (jsonRpcParams proc . payArray) iPayload
-        (InvPost, _)            -> maybe mempty payRaw iPayload
+        (InvRead _, _)      -> DirectArgs $ toRpcParams proc qsParams'
+        (Inv, MTUrlEncoded) -> DirectArgs $ maybe mempty (toRpcParams proc . payArray) iPayload
+        (Inv, _)            -> JsonArgs $ payRaw <$> iPayload
       txMode = case (invMethod, pdVolatility) of
-          (InvGet,  _)                 -> SQL.Read
-          (InvHead, _)                 -> SQL.Read
-          (InvPost, Routine.Stable)    -> SQL.Read
-          (InvPost, Routine.Immutable) -> SQL.Read
-          (InvPost, Routine.Volatile)  -> SQL.Write
+          (InvRead _,  _)          -> SQL.Read
+          (Inv, Routine.Stable)    -> SQL.Read
+          (Inv, Routine.Immutable) -> SQL.Read
+          (Inv, Routine.Volatile)  -> SQL.Write
       cPlan = callPlan proc apiRequest paramKeys args rPlan
   (handler, mediaType)  <- mapLeft ApiRequestError $ negotiateContent conf apiRequest relIdentifier iAcceptMediaType (dbMediaHandlers sCache) (hasDefaultSelect rPlan)
   if not (null invalidPrefs) && preferHandling == Just Strict then Left $ ApiRequestError $ InvalidPreferences invalidPrefs else Right ()
-  return $ CallReadPlan rPlan cPlan txMode proc handler mediaType
+  return $ CallReadPlan rPlan cPlan txMode proc handler mediaType invMethod identifier
   where
     qsParams' = QueryParams.qsParams iQueryParams
 
@@ -168,23 +197,23 @@ hasDefaultSelect :: ReadPlanTree -> Bool
 hasDefaultSelect (Node ReadPlan{select=[CoercibleSelectField{csField=CoercibleField{cfName}}]} []) = cfName == "*"
 hasDefaultSelect _ = False
 
-inspectPlan :: ApiRequest -> Either Error InspectPlan
-inspectPlan apiRequest = do
+inspectPlan :: ApiRequest -> Bool -> Schema -> Either Error InspectPlan
+inspectPlan apiRequest headersOnly schema = do
   let producedMTs = [MTOpenAPI, MTApplicationJSON, MTAny]
       accepts     = iAcceptMediaType apiRequest
   mediaType <- if not . null $ L.intersect accepts producedMTs
     then Right MTOpenAPI
     else Left . ApiRequestError . MediaTypeError $ MediaType.toMime <$> accepts
-  return $ InspectPlan mediaType SQL.Read
+  return $ InspectPlan mediaType SQL.Read headersOnly schema
 
 {-|
   Search a pg proc by matching name and arguments keys to parameters. Since a function can be overloaded,
   the name is not enough to find it. An overloaded function can have a different volatility or even a different return type.
 -}
-findProc :: QualifiedIdentifier -> S.Set Text -> Bool -> RoutineMap -> MediaType -> Bool -> Either ApiRequestError Routine
-findProc qi argumentsKeys paramsAsSingleObject allProcs contentMediaType isInvPost =
+findProc :: QualifiedIdentifier -> S.Set Text -> RoutineMap -> MediaType -> Bool -> Either ApiRequestError Routine
+findProc qi argumentsKeys allProcs contentMediaType isInvPost =
   case matchProc of
-    ([], [])     -> Left $ NoRpc (qiSchema qi) (qiName qi) (S.toList argumentsKeys) paramsAsSingleObject contentMediaType isInvPost (HM.keys allProcs) lookupProcName
+    ([], [])     -> Left $ NoRpc (qiSchema qi) (qiName qi) (S.toList argumentsKeys) contentMediaType isInvPost (HM.keys allProcs) lookupProcName
     -- If there are no functions with named arguments, fallback to the single unnamed argument function
     ([], [proc]) -> Right proc
     ([], procs)  -> Left $ AmbiguousRpc (toList procs)
@@ -215,13 +244,9 @@ findProc qi argumentsKeys paramsAsSingleObject allProcs contentMediaType isInvPo
     matchesParams proc =
       let
         params = pdParams proc
-        firstType = (ppType <$> headMay params)
       in
-      -- exceptional case for Prefer: params=single-object
-      if paramsAsSingleObject
-        then length params == 1 && (firstType == Just "json" || firstType == Just "jsonb")
       -- If the function has no parameters, the arguments keys must be empty as well
-      else if null params
+      if null params
         then null argumentsKeys && not (isInvPost && contentMediaType `elem` [MTOctetStream, MTTextPlain, MTTextXML])
       -- A function has optional and required parameters. Optional parameters have a default value and
       -- don't require arguments for the function to be executed, required parameters must have an argument present.
@@ -243,27 +268,29 @@ data ResolverContext = ResolverContext
   , outputType      :: Text                 -- ^ The output type for the response payload; e.g. "csv", "json", "binary".
   }
 
-resolveColumnField :: Column -> CoercibleField
-resolveColumnField col = CoercibleField (colName col) mempty False (colNominalType col) Nothing (colDefault col)
+resolveColumnField :: Column -> Maybe ToTsVector -> CoercibleField
+resolveColumnField col toTsV = CoercibleField (colName col) mempty False toTsV (colNominalType col) Nothing (colDefault col) False
 
-resolveTableFieldName :: Table -> FieldName -> CoercibleField
-resolveTableFieldName table fieldName =
+resolveTableFieldName :: Table -> FieldName -> Maybe ToTsVector -> CoercibleField
+resolveTableFieldName table fieldName toTsV=
   fromMaybe (unknownField fieldName []) $ HMI.lookup fieldName (tableColumns table) >>=
-    Just . resolveColumnField
+    Just . flip resolveColumnField toTsV
 
 -- | Resolve a type within the context based on the given field name and JSON path. Although there are situations where failure to resolve a field is considered an error (see `resolveOrError`), there are also situations where we allow it (RPC calls). If it should be an error and `resolveOrError` doesn't fit, ensure to check the `cfIRType` isn't empty.
-resolveTypeOrUnknown :: ResolverContext -> Field -> CoercibleField
-resolveTypeOrUnknown ResolverContext{..} (fn, jp) =
+resolveTypeOrUnknown :: ResolverContext -> Field -> Maybe ToTsVector -> CoercibleField
+resolveTypeOrUnknown ResolverContext{..} (fn, jp) toTsV =
   case res of
     -- types that are already json/jsonb don't need to be converted with `to_jsonb` for using arrow operators `data->attr`
     -- this prevents indexes not applying https://github.com/PostgREST/postgrest/issues/2594
-    cf@CoercibleField{cfIRType="json"}  -> cf{cfJsonPath=jp, cfToJson=False}
-    cf@CoercibleField{cfIRType="jsonb"} -> cf{cfJsonPath=jp, cfToJson=False}
+    cf@CoercibleField{cfIRType="json"}     -> cf{cfJsonPath=jp, cfToJson=False}
+    cf@CoercibleField{cfIRType="jsonb"}    -> cf{cfJsonPath=jp, cfToJson=False}
+    -- Do not apply to_tsvector to tsvector types
+    cf@CoercibleField{cfIRType="tsvector"} -> cf{cfJsonPath=jp, cfToJson=True, cfToTsVector=Nothing}
     -- other types will get converted `to_jsonb(col)->attr`, even unknown types
-    cf                                  -> cf{cfJsonPath=jp, cfToJson=True}
+    cf                                     -> cf{cfJsonPath=jp, cfToJson=True}
   where
     res = fromMaybe (unknownField fn jp) $ HM.lookup qi tables >>=
-          Just . flip resolveTableFieldName fn
+          Just . (\t -> resolveTableFieldName t fn toTsV)
 
 -- | Install any pre-defined data representation from source to target to coerce this reference.
 --
@@ -289,11 +316,15 @@ withJsonParse ctx field@CoercibleField{cfIRType} = withTransformer ctx "json" cf
 
 -- | Map the intermediate representation type to the output type defined by the resolver context (normally json), if available.
 resolveOutputField :: ResolverContext -> Field -> CoercibleField
-resolveOutputField ctx field = withOutputFormat ctx $ resolveTypeOrUnknown ctx field
+resolveOutputField ctx field = withOutputFormat ctx $ resolveTypeOrUnknown ctx field Nothing
 
 -- | Map the query string format of a value (text) into the intermediate representation type, if available.
-resolveQueryInputField :: ResolverContext -> Field -> CoercibleField
-resolveQueryInputField ctx field = withTextParse ctx $ resolveTypeOrUnknown ctx field
+resolveQueryInputField :: ResolverContext -> Field -> OpExpr -> CoercibleField
+resolveQueryInputField ctx field opExpr = withTextParse ctx $ resolveTypeOrUnknown ctx field toTsVector
+  where
+    toTsVector = case opExpr of
+      OpExpr _ (Fts _ lang _) -> Just $ ToTsVector lang
+      _                       -> Nothing
 
 -- | Builds the ReadPlan tree on a number of stages.
 -- | Adds filters, order, limits on its respective nodes.
@@ -306,8 +337,8 @@ readPlan qi@QualifiedIdentifier{..} AppConfig{configDbMaxRows, configDbAggregate
   in
     mapLeft ApiRequestError $
     treeRestrictRange configDbMaxRows (iAction apiRequest) =<<
-    validateAggFunctions configDbAggregates =<<
     hoistSpreadAggFunctions =<<
+    validateAggFunctions configDbAggregates =<<
     addRelSelects =<<
     addNullEmbedFilters =<<
     validateSpreadEmbeds =<<
@@ -354,10 +385,18 @@ addAliases = Right . fmap addAliasToPlan
 
     aliasSelectField :: CoercibleSelectField -> CoercibleSelectField
     aliasSelectField field@CoercibleSelectField{csField=fieldDetails, csAggFunction=aggFun, csAlias=alias}
-      | isJust alias || isJust aggFun = field
+      | isJust alias = field
+      | isJust aggFun = fieldAliasForSpreadAgg field
       | isJsonKeyPath fieldDetails, Just key <- lastJsonKey fieldDetails = field { csAlias = Just key }
       | isTransformPath fieldDetails = field { csAlias = Just (cfName fieldDetails) }
       | otherwise = field
+
+    -- A request like: `/top_table?select=...middle_table(...nested_table(count()))` will `SELECT` the full row instead of `*`,
+    -- because doing a `COUNT(*)` in `top_table` would not return the desired results.
+    -- So we use the "count" alias if none is present since the field name won't be selected.
+    fieldAliasForSpreadAgg field
+      | cfFullRow (csField field) = field { csAlias = Just "count" }
+      | otherwise                 = field
 
     isJsonKeyPath CoercibleField{cfJsonPath=(_: _)} = True
     isJsonKeyPath _                                 = False
@@ -402,30 +441,34 @@ expandStars ctx rPlanTree = Right $ expandStarsForReadPlan False rPlanTree
     adjustContext context fromQI _ = context{qi=fromQI}
 
 expandStarsForTable :: ResolverContext -> Bool -> ReadPlan -> ReadPlan
-expandStarsForTable ctx@ResolverContext{representations, outputType} hasAgg rp@ReadPlan{select=selectFields}
+expandStarsForTable ctx@ResolverContext{representations, outputType} hasAgg rp@ReadPlan{select=selectFields, relIsSpread=isSpread}
   -- We expand if either of the below are true:
   -- * We have a '*' select AND there is an aggregate function in this ReadPlan's sub-tree.
   -- * We have a '*' select AND the target table has at least one data representation.
-  -- We ignore any '*' selects that have an aggregate function attached (i.e for COUNT(*)).
-  | hasStarSelect && (hasAgg || hasDataRepresentation) = rp{select = concatMap (expandStarSelectField knownColumns) selectFields}
+  -- We ignore '*' selects that have an aggregate function attached, unless it's a `COUNT(*)` for a Spread Embed,
+  -- we tag it as "full row" in that case.
+  | hasStarSelect && (hasAgg || hasDataRepresentation) = rp{select = concatMap (expandStarSelectField isSpread knownColumns) selectFields}
   | otherwise = rp
   where
     hasStarSelect = "*" `elem` map (cfName . csField) filteredSelectFields
-    filteredSelectFields = filter (isNothing . csAggFunction) selectFields
+    filteredSelectFields = filter (shouldExpandOrTag . csAggFunction) selectFields
+    shouldExpandOrTag aggFunc = isNothing aggFunc || (isSpread && aggFunc == Just Count)
     hasDataRepresentation = any hasOutputRep knownColumns
     knownColumns = knownColumnsInContext ctx
 
     hasOutputRep :: Column -> Bool
     hasOutputRep col = HM.member (colNominalType col, outputType) representations
 
-    expandStarSelectField :: [Column] -> CoercibleSelectField -> [CoercibleSelectField]
-    expandStarSelectField columns sel@CoercibleSelectField{csField=CoercibleField{cfName="*", cfJsonPath=[]}, csAggFunction=Nothing} =
-      map (\col -> sel { csField = withOutputFormat ctx $ resolveColumnField col }) columns
-    expandStarSelectField _ selectField = [selectField]
+    expandStarSelectField :: Bool -> [Column] -> CoercibleSelectField -> [CoercibleSelectField]
+    expandStarSelectField _ columns sel@CoercibleSelectField{csField=CoercibleField{cfName="*", cfJsonPath=[]}, csAggFunction=Nothing} =
+      map (\col -> sel { csField = withOutputFormat ctx $ resolveColumnField col Nothing }) columns
+    expandStarSelectField True _ sel@CoercibleSelectField{csField=fld@CoercibleField{cfName="*", cfJsonPath=[]}, csAggFunction=Just Count} =
+      [sel { csField = fld { cfFullRow = True } }]
+    expandStarSelectField _ _ selectField = [selectField]
 
 -- | Enforces the `max-rows` config on the result
 treeRestrictRange :: Maybe Integer -> Action -> ReadPlanTree -> Either ApiRequestError ReadPlanTree
-treeRestrictRange _ (ActionMutate _) request = Right request
+treeRestrictRange _ (ActDb (ActRelationMut _ _)) request = Right request
 treeRestrictRange maxRows _ request = pure $ nodeRestrictRange maxRows <$> request
   where
     nodeRestrictRange :: Maybe Integer -> ReadPlan -> ReadPlan
@@ -462,9 +505,9 @@ addRels schema action allRels parentNode (Node rPlan@ReadPlan{relName,relHint,re
         newReadPlan = case action of
           -- the CTE for mutations/rpc is used as WITH sourceCTEName .. SELECT .. FROM sourceCTEName as alias,
           -- we use the table name as an alias so findRel can find the right relationship.
-          ActionMutate _ -> rPlan{from=newFrom, fromAlias=newAlias}
-          ActionInvoke _ -> rPlan{from=newFrom, fromAlias=newAlias}
-          _              -> rPlan
+          ActDb (ActRelationMut _ _) -> rPlan{from=newFrom, fromAlias=newAlias}
+          ActDb (ActRoutine _ _)     -> rPlan{from=newFrom, fromAlias=newAlias}
+          _                  -> rPlan
       in
       Node newReadPlan <$> updateForest (Just $ Node newReadPlan forest)
   where
@@ -481,7 +524,7 @@ getJoinConditions tblAlias parentAlias Relationship{relTable=qi,relForeignTable=
       toJoinCondition parentAlias tblAlias tN ftN <$> cols
     M2O _ cols ->
       toJoinCondition parentAlias tblAlias tN ftN <$> cols
-    O2O _ cols ->
+    O2O _ cols _ ->
       toJoinCondition parentAlias tblAlias tN ftN <$> cols
   where
     QualifiedIdentifier{qiSchema=tSchema, qiName=tN} = qi
@@ -506,20 +549,20 @@ findRel schema allRels origin target hint =
     rs  -> Left $ AmbiguousRelBetween origin target rs
   where
     matchFKSingleCol hint_ card = case card of
-      O2M _ [(col, _)] -> hint_ == col
-      M2O _ [(col, _)] -> hint_ == col
-      O2O _ [(col, _)] -> hint_ == col
-      _                -> False
+      O2M{relColumns=[(col, _)]} -> hint_ == col
+      M2O{relColumns=[(col, _)]} -> hint_ == col
+      O2O{relColumns=[(col, _)]} -> hint_ == col
+      _                          -> False
     matchFKRefSingleCol hint_ card  = case card of
-      O2M _ [(_, fCol)] -> hint_ == fCol
-      M2O _ [(_, fCol)] -> hint_ == fCol
-      O2O _ [(_, fCol)] -> hint_ == fCol
-      _                 -> False
+      O2M{relColumns=[(_, fCol)]} -> hint_ == fCol
+      M2O{relColumns=[(_, fCol)]} -> hint_ == fCol
+      O2O{relColumns=[(_, fCol)]} -> hint_ == fCol
+      _                           -> False
     matchConstraint tar card = case card of
-      O2M cons _ -> tar == cons
-      M2O cons _ -> tar == cons
-      O2O cons _ -> tar == cons
-      _          -> False
+      O2M{relCons} -> tar == relCons
+      M2O{relCons} -> tar == relCons
+      O2O{relCons} -> tar == relCons
+      _            -> False
     matchJunction hint_ card = case card of
       M2M Junction{junTable} -> hint_ == qiName junTable
       _                      -> False
@@ -595,7 +638,11 @@ generateRelSelectField (Node ReadPlan{relToParent=Just rel, select, relName, rel
   where
     rsSelName = fromMaybe relName relAlias
     rsEmbedMode = if relIsToOne rel then JsonObject else JsonArray
-    rsEmptyEmbed = null select && null forest
+    rsEmptyEmbed = hasOnlyNullEmbed (null select) forest
+    hasOnlyNullEmbed = foldr checkIfNullEmbed
+    checkIfNullEmbed :: ReadPlanTree -> Bool -> Bool
+    checkIfNullEmbed (Node ReadPlan{select=s} f) isNullEmbed =
+      isNullEmbed && hasOnlyNullEmbed (null s) f
 generateRelSelectField _ = Nothing
 
 generateSpreadSelectFields :: ReadPlan -> [SpreadSelectField]
@@ -649,15 +696,23 @@ applySpreadAggHoistingToNode (Node rp@ReadPlan{relAggAlias, relToParent, relIsSp
                                 then (select rp, [])
                                 else hoistFromSelectFields relAggAlias (select rp)
 
-      newRelSelects = if null children
+      -- If the current `ReadPlan` is a spread rel and it has aggregates hoisted from
+      -- child relationships, then it must hoist those aggregates to its parent rel.
+      -- So we update them with the current `relAggAlias`.
+      hoistAgg ((_, fieldName), hoistFunc) = ((relAggAlias, fieldName), hoistFunc)
+      hoistedAggList = if relIsSpread
+                       then aggList ++ map hoistAgg allChildAggLists
+                       else aggList
+
+      newRelSelects = if null children || relIsSpread
                       then relSelect rp
                       else map (hoistIntoRelSelectFields allChildAggLists) $ relSelect rp
-  in  (Node rp { select = newSelects, relSelect = newRelSelects } newChildren, aggList)
+  in  (Node rp { select = newSelects, relSelect = newRelSelects } newChildren, hoistedAggList)
 
 -- Hoist aggregate functions from the select list of a ReadPlan, and return the
 -- updated select list and the list of hoisted aggregates.
 hoistFromSelectFields :: Alias -> [CoercibleSelectField] -> ([CoercibleSelectField], [HoistedAgg])
-hoistFromSelectFields aggAlias fields =
+hoistFromSelectFields relAggAlias fields =
     let (newFields, maybeAggs) = foldr processField ([], []) fields
     in (newFields, catMaybes maybeAggs)
   where
@@ -665,23 +720,21 @@ hoistFromSelectFields aggAlias fields =
       let (modifiedField, maybeAgg) = modifyField field
       in (modifiedField : newFields, maybeAgg : aggList)
 
-    modifyField field =
-      case csAggFunction field of
-        Just aggFunc ->
-          ( field { csAggFunction = Nothing, csAggCast = Nothing },
-            Just ((aggAlias, determineFieldName field), (aggFunc, csAggCast field, csAlias field)))
-        Nothing -> (field, Nothing)
-
-    determineFieldName field = fromMaybe (cfName $ csField field) (csAlias field)
+    modifyField field@CoercibleSelectField{csAggFunction=Just aggFunc, csField, csAggCast, csAlias} =
+      let determineFieldName = fromMaybe (cfName csField) csAlias
+          updatedField = field {csAggFunction = Nothing, csAggCast = Nothing}
+          hoistedField = Just ((relAggAlias, determineFieldName), (aggFunc, csAggCast, csAlias))
+      in (updatedField, hoistedField)
+    modifyField field = (field, Nothing)
 
 -- Taking the hoisted aggregates, modify the rel selects to apply the aggregates,
 -- and any applicable casts or aliases.
 hoistIntoRelSelectFields :: [HoistedAgg] -> RelSelectField -> RelSelectField
-hoistIntoRelSelectFields aggList r@(Spread {rsSpreadSel = spreadSelects, rsAggAlias = aggAlias}) =
+hoistIntoRelSelectFields aggList r@(Spread {rsSpreadSel = spreadSelects, rsAggAlias = relAggAlias}) =
     r { rsSpreadSel = map updateSelect spreadSelects }
   where
     updateSelect s =
-        case lookup (aggAlias, ssSelName s) aggList of
+        case lookup (relAggAlias, ssSelName s) aggList of
             Just (aggFunc, aggCast, fldAlias) ->
                 s { ssSelAggFunction = Just aggFunc,
                     ssSelAggCast     = aggCast,
@@ -691,9 +744,15 @@ hoistIntoRelSelectFields _ r = r
 
 validateAggFunctions :: Bool -> ReadPlanTree -> Either ApiRequestError ReadPlanTree
 validateAggFunctions aggFunctionsAllowed (Node rp@ReadPlan {select} forest)
-  | aggFunctionsAllowed = Node rp <$> traverse (validateAggFunctions aggFunctionsAllowed) forest
-  | any (isJust . csAggFunction) select = Left AggregatesNotAllowed
+  | not aggFunctionsAllowed && any (isJust . csAggFunction) select = Left AggregatesNotAllowed
   | otherwise = Node rp <$> traverse (validateAggFunctions aggFunctionsAllowed) forest
+
+-- | Lookup table in the schema cache before creating read plan
+findTable :: QualifiedIdentifier -> TablesMap -> Either ApiRequestError QualifiedIdentifier
+findTable qi@QualifiedIdentifier{..} tableMap =
+  case HM.lookup qi tableMap of
+    Nothing -> Left (TableNotFound qiSchema qiName (HM.elems tableMap))
+    Just _ -> Right qi
 
 addFilters :: ResolverContext -> ApiRequest -> ReadPlanTree -> Either ApiRequestError ReadPlanTree
 addFilters ctx ApiRequest{..} rReq =
@@ -702,9 +761,9 @@ addFilters ctx ApiRequest{..} rReq =
     QueryParams.QueryParams{..} = iQueryParams
     flts =
       case iAction of
-        ActionInvoke _ -> qsFilters
-        ActionRead _   -> qsFilters
-        _              -> qsFiltersNotRoot
+        ActDb (ActRelationRead _  _) -> qsFilters
+        ActDb (ActRoutine _ _)       -> qsFilters
+        _                            -> qsFiltersNotRoot
 
     addFilterToNode :: (EmbedPath, Filter) -> Either ApiRequestError ReadPlanTree ->  Either ApiRequestError ReadPlanTree
     addFilterToNode =
@@ -713,8 +772,8 @@ addFilters ctx ApiRequest{..} rReq =
 addOrders :: ResolverContext -> ApiRequest -> ReadPlanTree -> Either ApiRequestError ReadPlanTree
 addOrders ctx ApiRequest{..} rReq =
   case iAction of
-    ActionMutate _ -> Right rReq
-    _              -> foldr addOrderToNode (Right rReq) qsOrder
+    ActDb (ActRelationMut _ _) -> Right rReq
+    _                          -> foldr addOrderToNode (Right rReq) qsOrder
   where
     QueryParams.QueryParams{..} = iQueryParams
 
@@ -723,7 +782,7 @@ addOrders ctx ApiRequest{..} rReq =
 
 resolveOrder :: ResolverContext -> OrderTerm -> CoercibleOrderTerm
 resolveOrder _ (OrderRelationTerm a b c d) = CoercibleOrderRelationTerm a b c d
-resolveOrder ctx (OrderTerm fld dir nulls) = CoercibleOrderTerm (resolveTypeOrUnknown ctx fld) dir nulls
+resolveOrder ctx (OrderTerm fld dir nulls) = CoercibleOrderTerm (resolveTypeOrUnknown ctx fld Nothing) dir nulls
 
 -- Validates that the related resource on the order is an embedded resource,
 -- e.g. if `clients` is inside the `select` in /projects?order=clients(id)&select=*,clients(*),
@@ -752,8 +811,8 @@ addRelatedOrders (Node rp@ReadPlan{order,from} forest) = do
 --
 -- Setup:
 --
--- >>> let nullOp    = OpExpr True (Is TriNull)
--- >>> let nonNullOp = OpExpr False (Is TriNull)
+-- >>> let nullOp    = OpExpr True (Is IsNull)
+-- >>> let nonNullOp = OpExpr False (Is IsNull)
 -- >>> let notEqOp   = OpExpr True (Op OpNotEqual "val")
 -- >>> :{
 -- -- this represents the `projects(*)` part on `/clients?select=*,projects(*)`
@@ -788,7 +847,7 @@ addRelatedOrders (Node rp@ReadPlan{order,from} forest) = do
 --       where_ = [
 --         CoercibleStmnt (
 --           CoercibleFilter {
---            field = CoercibleField {cfName = "projects", cfJsonPath = [], cfToJson=False, cfIRType = "", cfTransform = Nothing, cfDefault = Nothing},
+--            field = CoercibleField {cfName = "projects", cfJsonPath = [], cfToJson=False, cfToTsVector = Nothing, cfIRType = "", cfTransform = Nothing, cfDefault = Nothing, cfFullRow = False},
 --            opExpr = op
 --           }
 --         )
@@ -804,7 +863,7 @@ addRelatedOrders (Node rp@ReadPlan{order,from} forest) = do
 -- Don't do anything to the filter if there's no embedding (a subtree) on projects. Assume it's a normal filter.
 --
 -- >>> ReadPlan.where_ . rootLabel <$> addNullEmbedFilters (readPlanTree nullOp [])
--- Right [CoercibleStmnt (CoercibleFilter {field = CoercibleField {cfName = "projects", cfJsonPath = [], cfToJson = False, cfIRType = "", cfTransform = Nothing, cfDefault = Nothing}, opExpr = OpExpr True (Is TriNull)})]
+-- Right [CoercibleStmnt (CoercibleFilter {field = CoercibleField {cfName = "projects", cfJsonPath = [], cfToJson = False, cfToTsVector = Nothing, cfIRType = "", cfTransform = Nothing, cfDefault = Nothing, cfFullRow = False}, opExpr = OpExpr True (Is IsNull)})]
 --
 -- If there's an embedding on projects, then change the filter to use the internal aggregate name (`clients_projects_1`) so the filter can succeed later.
 --
@@ -823,10 +882,10 @@ addNullEmbedFilters (Node rp@ReadPlan{where_=curLogic} forest) = do
     newNullFilters rPlans = \case
       (CoercibleExpr b lOp trees) ->
         CoercibleExpr b lOp <$> (newNullFilters rPlans `traverse` trees)
-      flt@(CoercibleStmnt (CoercibleFilter (CoercibleField fld [] _ _ _ _) opExpr)) ->
+      flt@(CoercibleStmnt (CoercibleFilter (CoercibleField fld [] _ _ _ _ _ _) opExpr)) ->
         let foundRP = find (\ReadPlan{relName, relAlias} -> fld == fromMaybe relName relAlias) rPlans in
         case (foundRP, opExpr) of
-          (Just ReadPlan{relAggAlias}, OpExpr b (Is TriNull)) -> Right $ CoercibleStmnt $ CoercibleFilterNullEmbed b relAggAlias
+          (Just ReadPlan{relAggAlias}, OpExpr b (Is IsNull)) -> Right $ CoercibleStmnt $ CoercibleFilterNullEmbed b relAggAlias
           _                                                   -> Right flt
       flt@(CoercibleStmnt _) ->
         Right flt
@@ -834,8 +893,8 @@ addNullEmbedFilters (Node rp@ReadPlan{where_=curLogic} forest) = do
 addRanges :: ApiRequest -> ReadPlanTree -> Either ApiRequestError ReadPlanTree
 addRanges ApiRequest{..} rReq =
   case iAction of
-    ActionMutate _ -> Right rReq
-    _              -> foldr addRangeToNode (Right rReq) =<< ranges
+    ActDb (ActRelationMut _ _) -> Right rReq
+    _                          -> foldr addRangeToNode (Right rReq) =<< ranges
   where
     ranges :: Either ApiRequestError [(EmbedPath, NonnegRange)]
     ranges = first QueryParamError $ QueryParams.pRequestRange `traverse` HM.toList iRange
@@ -857,7 +916,7 @@ resolveLogicTree ctx (Stmnt flt) = CoercibleStmnt $ resolveFilter ctx flt
 resolveLogicTree ctx (Expr b op lts) = CoercibleExpr b op (map (resolveLogicTree ctx) lts)
 
 resolveFilter :: ResolverContext -> Filter -> CoercibleFilter
-resolveFilter ctx (Filter fld opExpr) = CoercibleFilter{field=resolveQueryInputField ctx fld, opExpr=opExpr}
+resolveFilter ctx (Filter fld opExpr) = CoercibleFilter{field=resolveQueryInputField ctx fld opExpr, opExpr=opExpr}
 
 -- Validates that spread embeds are only done on to-one relationships
 validateSpreadEmbeds :: ReadPlanTree -> Either ApiRequestError ReadPlanTree
@@ -888,7 +947,7 @@ mutatePlan mutation qi ApiRequest{iPreferences=Preferences{..}, ..} SchemaCache{
     MutationCreate ->
       mapRight (\typedColumns -> Insert qi typedColumns body ((,) <$> preferResolution <*> Just confCols) [] returnings pkCols applyDefaults) typedColumnsOrError
     MutationUpdate ->
-      mapRight (\typedColumns -> Update qi typedColumns body combinedLogic iTopLevelRange rootOrder returnings applyDefaults) typedColumnsOrError
+      mapRight (\typedColumns -> Update qi typedColumns body combinedLogic returnings applyDefaults) typedColumnsOrError
     MutationSingleUpsert ->
         if null qsLogic &&
            qsFilterFields == S.fromList pkCols &&
@@ -899,7 +958,7 @@ mutatePlan mutation qi ApiRequest{iPreferences=Preferences{..}, ..} SchemaCache{
           then mapRight (\typedColumns -> Insert qi typedColumns body (Just (MergeDuplicates, pkCols)) combinedLogic returnings mempty False) typedColumnsOrError
         else
           Left InvalidFilters
-    MutationDelete -> Right $ Delete qi combinedLogic iTopLevelRange rootOrder returnings
+    MutationDelete -> Right $ Delete qi combinedLogic returnings
   where
     ctx = ResolverContext dbTables dbRepresentations qi "json"
     confCols = fromMaybe pkCols qsOnConflict
@@ -911,35 +970,32 @@ mutatePlan mutation qi ApiRequest{iPreferences=Preferences{..}, ..} SchemaCache{
     tbl = HM.lookup qi dbTables
     pkCols = maybe mempty tablePKCols tbl
     logic = map (resolveLogicTree ctx . snd) qsLogic
-    rootOrder = resolveOrder ctx <$> maybe [] snd (find (\(x, _) -> null x) qsOrder)
     combinedLogic = foldr (addFilterToLogicForest . resolveFilter ctx) logic qsFiltersRoot
     body = payRaw <$> iPayload -- the body is assumed to be json at this stage(ApiRequest validates)
     applyDefaults = preferMissing == Just ApplyDefaults
     typedColumnsOrError = resolveOrError ctx tbl `traverse` S.toList iColumns
 
 resolveOrError :: ResolverContext -> Maybe Table -> FieldName -> Either ApiRequestError CoercibleField
-resolveOrError _ Nothing _ = Left NotFound
+resolveOrError _ Nothing _ = Left NotFound -- TODO: control never reaches here since #3869, should be fixed when fixing #3906
 resolveOrError ctx (Just table) field =
-  case resolveTableFieldName table field of
+  case resolveTableFieldName table field Nothing of
     CoercibleField{cfIRType=""} -> Left $ ColumnNotFound (tableName table) field
     cf                          -> Right $ withJsonParse ctx cf
 
-callPlan :: Routine -> ApiRequest -> S.Set FieldName -> LBS.ByteString -> ReadPlanTree -> CallPlan
-callPlan proc ApiRequest{iPreferences=Preferences{..}} paramKeys args readReq = FunctionCall {
+callPlan :: Routine -> ApiRequest -> S.Set FieldName -> CallArgs -> ReadPlanTree -> CallPlan
+callPlan proc ApiRequest{} paramKeys args readReq = FunctionCall {
   funCQi = QualifiedIdentifier (pdSchema proc) (pdName proc)
 , funCParams = callParams
-, funCArgs = Just args
+, funCArgs = args
 , funCScalar = funcReturnsScalar proc
 , funCSetOfScalar = funcReturnsSetOfScalar proc
 , funCRetCompositeAlias = funcReturnsCompositeAlias proc
 , funCReturning = inferColsEmbedNeeds readReq []
 }
   where
-    paramsAsSingleObject = preferParameters == Just SingleObject
     specifiedParams = filter (\x -> ppName x `S.member` paramKeys)
     callParams = case pdParams proc of
-      [prm] | paramsAsSingleObject -> OnePosParam prm
-            | ppName prm == mempty -> OnePosParam prm
+      [prm] | ppName prm == mempty -> OnePosParam prm
             | otherwise            -> KeyParams $ specifiedParams [prm]
       prms  -> KeyParams $ specifiedParams prms
 
@@ -963,7 +1019,7 @@ inferColsEmbedNeeds (Node ReadPlan{select} forest) pkCols
           Just $ fst <$> cols
         Node ReadPlan{relToParent=Just Relationship{relCardinality=M2O _ cols}} _ ->
           Just $ fst <$> cols
-        Node ReadPlan{relToParent=Just Relationship{relCardinality=O2O _ cols}} _ ->
+        Node ReadPlan{relToParent=Just Relationship{relCardinality=O2O _ cols _}} _ ->
           Just $ fst <$> cols
         Node ReadPlan{relToParent=Just Relationship{relCardinality=M2M Junction{junColsSource=cols}}} _ ->
           Just $ fst <$> cols
@@ -997,13 +1053,13 @@ addFilterToLogicForest flt lf = CoercibleStmnt flt : lf
 negotiateContent :: AppConfig -> ApiRequest -> QualifiedIdentifier -> [MediaType] -> MediaHandlerMap -> Bool -> Either ApiRequestError ResolvedHandler
 negotiateContent conf ApiRequest{iAction=act, iPreferences=Preferences{preferRepresentation=rep}} identifier accepts produces defaultSelect =
   case (act, firstAcceptedPick) of
-    (_, Nothing)                         -> Left . MediaTypeError $ map MediaType.toMime accepts
-    (ActionMutate _, Just (x, mt))       -> Right (if rep == Just Full then x else NoAgg, mt)
+    (_, Nothing)                                             -> Left . MediaTypeError $ map MediaType.toMime accepts
+    (ActDb (ActRelationMut _ _),              Just (x, mt)) -> Right (if rep == Just Full then x else NoAgg, mt)
     -- no need for an aggregate on HEAD https://github.com/PostgREST/postgrest/issues/2849
     -- TODO: despite no aggregate, these are responding with a Content-Type, which is not correct.
-    (ActionRead True, Just (_, mt))      -> Right (NoAgg, mt)
-    (ActionInvoke InvHead, Just (_, mt)) -> Right (NoAgg, mt)
-    (_, Just (x, mt))                    -> Right (x, mt)
+    (ActDb (ActRelationRead _ True),             Just (_, mt)) -> Right (NoAgg, mt)
+    (ActDb (ActRoutine  _ (InvRead True)), Just (_, mt))             -> Right (NoAgg, mt)
+    (_, Just (x, mt))                                        -> Right (x, mt)
   where
     firstAcceptedPick = listToMaybe $ mapMaybe matchMT accepts -- If there are multiple accepted media types, pick the first. This is usual in content negotiation.
     matchMT mt = case mt of

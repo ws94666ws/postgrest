@@ -23,7 +23,7 @@ Builtin Media Type Handlers
 
 Builtin handlers are offered for common standard media types.
 
-* ``text/csv`` and ``application/json``, for all API endpoints. See :ref:`tables_views` and :ref:`s_procs`.
+* ``text/csv`` and ``application/json``, for all API endpoints. See :ref:`tables_views` and :ref:`functions`.
 * ``application/openapi+json``, for the root endpoint. See :ref:`open-api`.
 * ``application/geo+json``, see :ref:`ww_postgis`.
 * ``*/*``, resolves to ``application/json`` for API endpoints and to ``application/openapi+json`` for the root endpoint.
@@ -74,17 +74,15 @@ This returns
 
   { "id": 1 }
 
-with a :code:`Content-Type: application/vnd.pgrst.object+json`.
-
 When a singular response is requested but no entries are found, the server responds with an error message and 406 Not Acceptable status code rather than the usual empty array and 200 status:
 
 .. code-block:: json
 
   {
-    "message": "JSON object requested, multiple (or no) rows returned",
-    "details": "Results contain 0 rows, application/vnd.pgrst.object+json requires 1 row",
-    "hint": null,
-    "code": "PGRST505"
+    "code": "PGRST116",
+    "message": "Cannot coerce the result to a single JSON object",
+    "details": "The result contains 0 rows",
+    "hint": null
   }
 
 .. note::
@@ -108,7 +106,7 @@ By default PostgREST returns all JSON null values. For example, requesting ``/pr
     { "id": 13, "name": "Y",        "client_id": null, "another_col": null }
   ]
 
-On large result sets, the unused keys with ``null`` values can waste bandwith unnecessarily. To remove them, specify ``nulls=stripped`` as a parameter of ``application/vnd.pgrst.array``:
+On large result sets, the unused keys with ``null`` values can waste bandwidth unnecessarily. To remove them, specify ``nulls=stripped`` as a parameter of ``application/vnd.pgrst.array``:
 
 .. code-block:: bash
 
@@ -136,12 +134,12 @@ The server handles the following request body media types:
 * ``application/x-www-form-urlencoded``
 * ``text/csv``
 
-For :ref:`tables_views` this works on ``POST``, ``PATCH`` and ``PUT`` methods. For :ref:`s_procs`, it works on ``POST`` methods.
+For :ref:`tables_views` this works on ``POST``, ``PATCH`` and ``PUT`` methods. For :ref:`functions`, it works on ``POST`` methods.
 
-For stored procedures there are three additional types:
+For functions there are three additional types:
 
 * ``application/octet-stream``
 * ``text/plain``
 * ``text/xml``
 
-See :ref:`s_proc_single_unnamed`.
+See :ref:`function_single_unnamed`.

@@ -1,16 +1,7 @@
---
--- PostgreSQL database dump
---
-
--- Dumped from database version 9.5beta1
--- Dumped by pg_dump version 9.5beta1
-
-SET statement_timeout = 0;
-SET lock_timeout = 0;
-SET client_encoding = 'UTF8';
-SET standard_conforming_strings = on;
 SET check_function_bodies = false;
-SET client_min_messages = warning;
+-- Hide warnings because casts on domains would show a lot of:
+--  WARNING:  cast will be ignored because the source data type is a domain
+SET client_min_messages = error;
 
 CREATE SCHEMA public;
 CREATE SCHEMA postgrest;
@@ -266,7 +257,7 @@ CREATE FUNCTION varied_arguments(
   enum enum_menagerie_type,
   arr text[],
   "integer" integer default 42,
-  json json default '{}',
+  "json" json default '{}',
   jsonb jsonb default '{}'
 ) RETURNS json
 LANGUAGE sql
@@ -308,7 +299,7 @@ CREATE FUNCTION varied_arguments_openapi(
   json_arr json[],
   jsonb_arr jsonb[],
   "integer" integer default 42,
-  json json default '{}',
+  "json" json default '{}',
   jsonb jsonb default '{}'
 ) RETURNS json
   LANGUAGE sql
@@ -1055,19 +1046,14 @@ CREATE FUNCTION setprojects(id_l int, id_h int, name text) RETURNS SETOF project
     update test.projects set name = $3 WHERE id >= $1 AND id <= $2 returning *;
 $_$;
 
--- domains on tables are only supported from pg 11 on
-DO $do$BEGIN
-  IF (SELECT current_setting('server_version_num')::INT >= 110000) THEN
-      CREATE DOMAIN projects_domain AS projects;
+CREATE DOMAIN projects_domain AS projects;
 
-      CREATE FUNCTION getproject_domain(id int) RETURNS SETOF projects_domain
-          LANGUAGE sql
-          STABLE
-          AS $_$
-          SELECT projects::projects_domain FROM test.projects WHERE id = $1;
-    $_$;
-  END IF;
-END$do$;
+CREATE FUNCTION getproject_domain(id int) RETURNS SETOF projects_domain
+    LANGUAGE sql
+    STABLE
+    AS $_$
+    SELECT projects::projects_domain FROM test.projects WHERE id = $1;
+$_$;
 
 create table images (
 	name text  not null,
@@ -1128,16 +1114,11 @@ create function test.ret_point_overloaded(x json) returns json as $$
   select $1;
 $$ language sql;
 
--- domains on composite types are only supported from pg 11 on
-do $do$begin
-  if (SELECT current_setting('server_version_num')::int >= 110000) then
-    create domain test.composite_domain as test.point_2d;
+create domain test.composite_domain as test.point_2d;
 
-    create function test.ret_composite_domain() returns test.composite_domain as $$
-      select row(10, 5)::test.composite_domain;
-    $$ language sql;
-  end if;
-end$do$;
+create function test.ret_composite_domain() returns test.composite_domain as $$
+  select row(10, 5)::test.composite_domain;
+$$ language sql;
 
 create type private.point_3d as (x integer, y integer, z integer);
 
@@ -2298,90 +2279,78 @@ create table private.rollen (
 );
 
 -- Tables used for testing embedding between partitioned tables
+create table test.car_models(
+  name varchar(64) not null,
+  year int not null
+) partition by list (year);
 
-do $do$begin
-    -- partitioned tables using the PARTITION syntax are supported from pg v10
-    if (select current_setting('server_version_num')::int >= 100000) then
-      create table test.car_models(
-        name varchar(64) not null,
-        year int not null
-      ) partition by list (year);
-
-      comment on table test.car_models is
-      $$A partitioned table
+comment on table test.car_models is
+$$A partitioned table
 
 A test for partitioned tables$$;
 
-      create table test.car_models_2021 partition of test.car_models
-        for values in (2021);
-      create table test.car_models_default partition of test.car_models
-        for values in (1981,1997,2001,2013);
-    end if;
+create table test.car_models_2021 partition of test.car_models
+  for values in (2021);
+create table test.car_models_default partition of test.car_models
+  for values in (1981,1997,2001,2013);
 
-    -- primary keys for partitioned tables are supported from pg v11
-    if (select current_setting('server_version_num')::int >= 110000) then
-      create table test.car_brands (
-        name varchar(64) primary key
-      );
+create table test.car_brands (
+  name varchar(64) primary key
+);
 
-      alter table test.car_models add primary key (name, year);
-      alter table test.car_models add column car_brand_name varchar(64) references test.car_brands(name);
-    end if;
+alter table test.car_models add primary key (name, year);
+alter table test.car_models add column car_brand_name varchar(64) references test.car_brands(name);
 
-    -- foreign keys referencing partitioned tables are supported from pg v12
-    if (select current_setting('server_version_num')::int >= 120000) then
-      create table test.car_model_sales(
-        date varchar(64) not null,
-        quantity int not null,
-        car_model_name varchar(64),
-        car_model_year int,
-        primary key (date, car_model_name, car_model_year),
-        foreign key (car_model_name, car_model_year) references test.car_models (name, year)
-      ) partition by range (date);
+create table test.car_model_sales(
+  date varchar(64) not null,
+  quantity int not null,
+  car_model_name varchar(64),
+  car_model_year int,
+  primary key (date, car_model_name, car_model_year),
+  foreign key (car_model_name, car_model_year) references test.car_models (name, year)
+) partition by range (date);
 
-      create table test.car_model_sales_202101 partition of test.car_model_sales
-        for values from ('2021-01-01') to ('2021-01-31');
+create table test.car_model_sales_202101 partition of test.car_model_sales
+  for values from ('2021-01-01') to ('2021-01-31');
 
-      create table test.car_model_sales_default partition of test.car_model_sales
-        default;
+create table test.car_model_sales_default partition of test.car_model_sales
+  default;
 
-      create table test.car_racers (
-        name varchar(64) not null primary key,
-        car_model_name varchar(64),
-        car_model_year int,
-        foreign key (car_model_name, car_model_year) references test.car_models (name, year)
-      );
+create table test.car_racers (
+  name varchar(64) not null primary key,
+  car_model_name varchar(64),
+  car_model_year int,
+  foreign key (car_model_name, car_model_year) references test.car_models (name, year)
+);
 
-      create table test.car_dealers (
-        name varchar(64) not null,
-        city varchar(64) not null,
-        primary key (name, city)
-      ) partition by list (city);
+create table test.car_dealers (
+  name varchar(64) not null,
+  city varchar(64) not null,
+  primary key (name, city)
+) partition by list (city);
 
-      create table test.car_dealers_springfield partition of test.car_dealers
-        for values in ('Springfield');
+create table test.car_dealers_springfield partition of test.car_dealers
+  for values in ('Springfield');
 
-      create table test.car_dealers_default partition of test.car_dealers
-        default;
+create table test.car_dealers_default partition of test.car_dealers
+  default;
 
-      create table test.car_models_car_dealers (
-        car_model_name varchar(64) not null,
-        car_model_year int not null,
-        car_dealer_name varchar(64) not null,
-        car_dealer_city varchar(64) not null,
-        quantity int not null,
-        foreign key (car_model_name, car_model_year) references test.car_models (name, year),
-        foreign key (car_dealer_name, car_dealer_city) references test.car_dealers (name, city),
-        primary key (car_model_name, car_model_year, car_dealer_name, car_dealer_city, quantity)
-      ) partition by range (quantity);
+create table test.car_models_car_dealers (
+  car_model_name varchar(64) not null,
+  car_model_year int not null,
+  car_dealer_name varchar(64) not null,
+  car_dealer_city varchar(64) not null,
+  quantity int not null,
+  foreign key (car_model_name, car_model_year) references test.car_models (name, year),
+  foreign key (car_dealer_name, car_dealer_city) references test.car_dealers (name, city),
+  primary key (car_model_name, car_model_year, car_dealer_name, car_dealer_city, quantity)
+) partition by range (quantity);
 
-      create table test.car_models_car_dealers_10to20 partition of test.car_models_car_dealers
-        for values from (10) to (20);
+create table test.car_models_car_dealers_10to20 partition of test.car_models_car_dealers
+  for values from (10) to (20);
 
-      create table test.car_models_car_dealers_default partition of test.car_models_car_dealers
-        default;
-    end if;
-end$do$;
+create table test.car_models_car_dealers_default partition of test.car_models_car_dealers
+  default;
 
 create or replace function test.unnamed_json_param(json) returns json as $$
   select $1;
@@ -2501,22 +2470,15 @@ BEGIN
 END$$;
 
 -- This view is not used in any requests but just parsed by the pfkSourceColumns query.
--- XMLTABLE is only supported from PG 10 on
-DO $do$
-BEGIN
-  IF current_setting('server_version_num')::INT >= 100000 THEN
-    CREATE VIEW test.xml AS
-    SELECT *
-      FROM (SELECT ''::xml AS data) _,
-           XMLTABLE(
-             ''
-             PASSING data
-             COLUMNS id int PATH '@id',
-                     premier_name text PATH 'PREMIER_NAME' DEFAULT 'not specified'
-           );
-  END IF;
-END
-$do$;
+CREATE VIEW test.xml AS
+SELECT *
+  FROM (SELECT ''::xml AS data) _,
+       XMLTABLE(
+         ''
+         PASSING data
+         COLUMNS id int PATH '@id',
+                 premier_name text PATH 'PREMIER_NAME' DEFAULT 'not specified'
+       );
 
 -- https://github.com/PostgREST/postgrest/issues/1543
 CREATE TYPE complex AS (
@@ -2538,12 +2500,8 @@ create table test.arrays (
 
 -- This procedure is to confirm that procedures don't show up in the OpenAPI output right now.
 -- Procedures are not supported, yet.
-do $do$begin
-  if (select current_setting('server_version_num')::int >= 110000) then
-    CREATE PROCEDURE test.unsupported_proc ()
-    LANGUAGE SQL AS '';
-  end if;
-end $do$;
+CREATE PROCEDURE test.unsupported_proc ()
+LANGUAGE SQL AS '';
 
 CREATE FUNCTION public.dummy(int) RETURNS int
 LANGUAGE SQL AS $$ SELECT 1 $$;
@@ -2553,56 +2511,6 @@ CREATE AGGREGATE test.unsupported_agg (*) (
   SFUNC = public.dummy,
   STYPE = int
 );
-
-create table limited_update_items(
-  id int primary key
-, name text
-);
-
-create table limited_update_items_cpk(
-  id int
-, name text
-, primary key (id, name)
-);
-
-create table limited_update_items_no_pk(
-  id int
-, name text
-);
-
-create view limited_update_items_view as
-select * from limited_update_items;
-
-create view limited_update_items_wnonuniq_view as
-select *, 'static'::text as static from limited_update_items;
-
-create view limited_update_items_cpk_view as
-select * from limited_update_items_cpk;
-
-create table limited_delete_items(
-  id int primary key
-, name text
-);
-
-create table limited_delete_items_cpk(
-  id int
-, name text
-, primary key (id, name)
-);
-
-create table limited_delete_items_no_pk(
-  id int
-, name text
-);
-
-create view limited_delete_items_view as
-select * from limited_delete_items;
-
-create view limited_delete_items_wnonuniq_view as
-select *, 'static'::text as static from limited_delete_items;
-
-create view limited_delete_items_cpk_view as
-select * from limited_delete_items_cpk;
 
 create function reset_table(tbl_name text default '', tbl_data json default '[]') returns void as $_$ begin
   execute format(
@@ -2812,11 +2720,11 @@ END; $$ LANGUAGE plpgsql SECURITY DEFINER;
 DROP DOMAIN IF EXISTS public.titlecasetext CASCADE;
 CREATE DOMAIN public.titlecasetext AS text;
 
-CREATE OR REPLACE FUNCTION json(public.titlecasetext) RETURNS json AS $$
+CREATE OR REPLACE FUNCTION "json"(public.titlecasetext) RETURNS json AS $$
   SELECT to_json(INITCAP($1::text));
 $$ LANGUAGE SQL IMMUTABLE;
 
-CREATE CAST (public.titlecasetext AS json) WITH FUNCTION json(public.titlecasetext) AS IMPLICIT;
+CREATE CAST (public.titlecasetext AS json) WITH FUNCTION "json"(public.titlecasetext) AS IMPLICIT;
 -- End of data representations specific stuff except for where the domain is used in the table.
 
 CREATE TABLE designers (
@@ -2881,7 +2789,7 @@ CREATE TABLE test.students_info(
 , code text
 , address text
 , primary key(id, code)
-, foreign key (id, code) references test.students(id, code) on delete cascade
+, foreign key (code, id) references test.students(code, id) on delete cascade
 );
 
 CREATE TABLE test.country(
@@ -3148,14 +3056,14 @@ CREATE OR REPLACE FUNCTION color(text) RETURNS public.color AS $$
   SELECT (('x' || lpad((CASE WHEN SUBSTRING($1::text, 1, 1) = '#' THEN SUBSTRING($1::text, 2) ELSE $1::text END), 8, '0'))::bit(32)::int)::public.color;
 $$ LANGUAGE SQL IMMUTABLE;
 
-CREATE OR REPLACE FUNCTION json(public.color) RETURNS json AS $$
+CREATE OR REPLACE FUNCTION "json"(public.color) RETURNS json AS $$
   SELECT
     CASE WHEN $1 IS NULL THEN to_json(''::text)
     ELSE to_json('#' || lpad(upper(to_hex($1)), 6, '0'))
   END;
 $$ LANGUAGE SQL IMMUTABLE;
 
-CREATE CAST (public.color AS json) WITH FUNCTION json(public.color) AS IMPLICIT;
+CREATE CAST (public.color AS json) WITH FUNCTION "json"(public.color) AS IMPLICIT;
 CREATE CAST (json AS public.color) WITH FUNCTION color(json) AS IMPLICIT;
 CREATE CAST (text AS public.color) WITH FUNCTION color(text) AS IMPLICIT;
 
@@ -3170,11 +3078,11 @@ CREATE OR REPLACE FUNCTION isodate(text) RETURNS public.isodate AS $$
   SELECT (replace($1, 'Z', '+00:00')::timestamp with time zone)::public.isodate;
 $$ LANGUAGE SQL IMMUTABLE;
 
-CREATE OR REPLACE FUNCTION json(public.isodate) RETURNS json AS $$
+CREATE OR REPLACE FUNCTION "json"(public.isodate) RETURNS json AS $$
   SELECT to_json(replace(to_json($1)#>>'{}', '+00:00', 'Z'));
 $$ LANGUAGE SQL IMMUTABLE;
 
-CREATE CAST (public.isodate AS json) WITH FUNCTION json(public.isodate) AS IMPLICIT;
+CREATE CAST (public.isodate AS json) WITH FUNCTION "json"(public.isodate) AS IMPLICIT;
 CREATE CAST (json AS public.isodate) WITH FUNCTION isodate(json) AS IMPLICIT;
 -- We intentionally don't have this in order to test query string parsing doesn't try to fall back on JSON parsing.
 -- CREATE CAST (text AS public.isodate) WITH FUNCTION isodate(text) AS IMPLICIT;
@@ -3192,11 +3100,11 @@ CREATE OR REPLACE FUNCTION bytea_b64(text) RETURNS public.bytea_b64 AS $$
   SELECT decode($1 || repeat('=', 4 - (length($1) % 4)), 'base64')::public.bytea_b64;
 $$ LANGUAGE SQL IMMUTABLE;
 
-CREATE OR REPLACE FUNCTION json(public.bytea_b64) RETURNS json AS $$
+CREATE OR REPLACE FUNCTION "json"(public.bytea_b64) RETURNS json AS $$
   SELECT to_json(translate(encode($1, 'base64'), E'\n', ''));
 $$ LANGUAGE SQL IMMUTABLE;
 
-CREATE CAST (public.bytea_b64 AS json) WITH FUNCTION json(public.bytea_b64) AS IMPLICIT;
+CREATE CAST (public.bytea_b64 AS json) WITH FUNCTION "json"(public.bytea_b64) AS IMPLICIT;
 CREATE CAST (json AS public.bytea_b64) WITH FUNCTION bytea_b64(json) AS IMPLICIT;
 CREATE CAST (text AS public.bytea_b64) WITH FUNCTION bytea_b64(text) AS IMPLICIT;
 
@@ -3212,12 +3120,12 @@ CREATE OR REPLACE FUNCTION unixtz(text) RETURNS public.unixtz AS $$
   SELECT (to_timestamp($1::numeric)::public.unixtz);
 $$ LANGUAGE SQL IMMUTABLE;
 
-CREATE OR REPLACE FUNCTION json(public.unixtz) RETURNS json AS $$
+CREATE OR REPLACE FUNCTION "json"(public.unixtz) RETURNS json AS $$
   SELECT to_json(extract(epoch from $1)::bigint);
 $$ LANGUAGE SQL IMMUTABLE;
 
 
-CREATE CAST (public.unixtz AS json) WITH FUNCTION json(public.unixtz) AS IMPLICIT;
+CREATE CAST (public.unixtz AS json) WITH FUNCTION "json"(public.unixtz) AS IMPLICIT;
 CREATE CAST (json AS public.unixtz) WITH FUNCTION unixtz(json) AS IMPLICIT;
 CREATE CAST (text AS public.unixtz) WITH FUNCTION unixtz(text) AS IMPLICIT;
 
@@ -3232,11 +3140,11 @@ CREATE OR REPLACE FUNCTION monetary(text) RETURNS public.monetary AS $$
   SELECT ($1::numeric)::public.monetary;
 $$ LANGUAGE SQL IMMUTABLE;
 
-CREATE OR REPLACE FUNCTION json(public.monetary) RETURNS json AS $$
+CREATE OR REPLACE FUNCTION "json"(public.monetary) RETURNS json AS $$
   SELECT to_json($1::text);
 $$ LANGUAGE SQL IMMUTABLE;
 
-CREATE CAST (public.monetary AS json) WITH FUNCTION json(public.monetary) AS IMPLICIT;
+CREATE CAST (public.monetary AS json) WITH FUNCTION "json"(public.monetary) AS IMPLICIT;
 CREATE CAST (json AS public.monetary) WITH FUNCTION monetary(json) AS IMPLICIT;
 CREATE CAST (text AS public.monetary) WITH FUNCTION monetary(text) AS IMPLICIT;
 
@@ -3286,17 +3194,11 @@ create table test.tbl_w_json(
   data json
 );
 
-DO $do$
-BEGIN
-  IF current_setting('server_version_num')::INT >= 100000 THEN
-    CREATE TABLE test.channels (
-      id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-      data jsonb DEFAULT '{"foo": "bar"}',
-      slug text
-    );
-  END IF;
-END
-$do$;
+CREATE TABLE test.channels (
+  id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  data jsonb DEFAULT '{"foo": "bar"}',
+  slug text
+);
 
 CREATE FUNCTION test.is_superuser() RETURNS boolean
 LANGUAGE sql
@@ -3304,27 +3206,26 @@ AS $$
   select current_setting('is_superuser')::boolean;
 $$;
 
-DO $do$
-BEGIN
-  IF current_setting('server_version_num')::INT >= 120000 THEN
-    CREATE TABLE test.foo (
-      a text,
-      b text GENERATED ALWAYS AS (
-          case WHEN a = 'telegram' THEN 'im'
-               WHEN a = 'proton' THEN 'email'
-               WHEN a = 'infinity' THEN 'idea'
-               ELSE 'bad idea'
-          end) stored
-    );
-  END IF;
-END
-$do$;
+CREATE TABLE test.foo (
+  a text,
+  b text GENERATED ALWAYS AS (
+      case WHEN a = 'telegram' THEN 'im'
+           WHEN a = 'proton' THEN 'email'
+           WHEN a = 'infinity' THEN 'idea'
+           ELSE 'bad idea'
+      end) stored
+);
 
 create domain devil_int as int
   default 666;
 
 create table evil_friends(
   id   devil_int
+, name text
+);
+
+create table evil_friends_with_column_default(
+  id   devil_int default 420
 , name text
 );
 
@@ -3768,3 +3669,96 @@ create aggregate test.outfunc_agg (anyelement) (
 , stype = "pg/outfunc"
 , sfunc = outfunc_trans
 );
+
+-- used for manual testing
+create or replace function test.sleep(seconds double precision default 5) returns void as $$
+  select pg_sleep(seconds);
+$$ language sql;
+
+-- https://github.com/PostgREST/postgrest/issues/3256
+create view test.infinite_recursion as
+select * from test.projects;
+
+create or replace view test.infinite_recursion as
+select * from test.infinite_recursion;
+
+
+create or replace function temp_file_limit()
+returns bigint as $$
+  select COUNT(*) FROM generate_series('-infinity'::TIMESTAMP, 'epoch'::TIMESTAMP, INTERVAL '1 DAY');
+$$ language sql security definer set temp_file_limit to '1kB';
+
+-- https://github.com/PostgREST/postgrest/issues/3255
+create table test.infinite_inserts(
+  id int
+, name text
+);
+
+create or replace function infinite_inserts()
+returns trigger as $$ begin
+  insert into infinite_inserts values (NEW.id, NEW.name);
+end $$ language plpgsql;
+
+create trigger do_infinite_inserts
+after insert
+on infinite_inserts
+for each row
+execute procedure infinite_inserts();
+
+create table factories (
+  id int primary key,
+  name text
+);
+
+create table process_categories (
+  id int primary key,
+  name text
+);
+
+create table processes (
+  id int primary key,
+  name text,
+  factory_id int references factories(id),
+  category_id int references process_categories(id)
+);
+
+create table process_costs (
+  process_id int references processes(id) primary key,
+  cost numeric
+);
+
+create table supervisors (
+  id int primary key,
+  name text
+);
+
+create table process_supervisor (
+  process_id int references processes(id),
+  supervisor_id int references supervisors(id),
+  primary key (process_id, supervisor_id)
+);
+
+create table surr_serial_upsert (
+  id serial primary key,
+  name text,
+  extra text
+);
+
+create table surr_gen_default_upsert (
+  id int generated by default as identity primary key,
+  name text,
+  extra text
+);
+
+create table tsearch_to_tsvector (
+  text_search text,
+  jsonb_search jsonb
+);
+
+create function test.get_tsearch_to_tsvector() returns setof test.tsearch_to_tsvector AS $$
+  select * from test.tsearch_to_tsvector;
+$$ language sql;
+
+create function test.text_search_vector(test.tsearch_to_tsvector) returns tsvector AS $$
+  select to_tsvector('simple', $1.text_search)
+$$ language sql;
